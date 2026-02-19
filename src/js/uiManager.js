@@ -90,7 +90,7 @@ class UIManager {
         this.toggle = document.createElement('button');
         this.toggle.className = 'layers-control__toggle';
         this.toggle.setAttribute('aria-label', 'Toggle layers');
-        this.toggle.textContent = this.options.icon || '☰';
+        this.toggle.innerHTML = this.options.icon || '☰';
         this.toggle.addEventListener('click', this._handleToggleClick);
 
         // Panel

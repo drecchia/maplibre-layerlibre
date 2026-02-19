@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LayersControl — Group + Forced Base Layer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist/stylesheet.min.css">
+  <link href="../dist/css/all.css" rel="stylesheet">
+  <style>
+    html, body, #map { height: 100%; margin: 0; padding: 0; }
+    #map { width: 100vw; height: 100vh; }
+
+    .panel {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: white;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      max-width: 340px;
+      z-index: 1000;
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .panel h3 { margin: 0 0 8px 0; font-size: 15px; }
+    .panel p  { margin: 0 0 8px 0; color: #555; }
+
+    .scenario {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .scenario h4 { margin: 0 0 4px 0; font-size: 13px; }
+    .scenario p  { margin: 0; font-size: 12px; color: #666; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .actions button {
+      flex: 1 1 auto;
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .actions button:hover { background: #f0f0f0; }
+
+    .log {
+      margin-top: 10px;
+      padding: 8px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      max-height: 140px;
+      overflow-y: auto;
+      font-size: 11px;
+      font-family: monospace;
+    }
+    .log-entry          { margin: 1px 0; color: #333; }
+    .log-entry.base     { color: #0055bb; }
+    .log-entry.overlay  { color: #2a9d2a; }
+    .log-entry.warn     { color: #cc7700; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="panel">
+    <h3>Group + <code>forcedBaseLayerId</code></h3>
+    <p>
+      Two base layers are available. Enabling an overlay inside the
+      <em>Night View</em> group forces the map to switch to the
+      <strong>Dark (Carto)</strong> base layer automatically.
+      Disabling all overlays in that group does <em>not</em> revert the base.
+    </p>
+
+    <div class="scenario">
+      <h4>Default base — OpenStreetMap</h4>
+      <p>
+        "Cities" overlay lives in <em>Day View</em> and has no
+        <code>forcedBaseLayerId</code> — stays on OSM.
+      </p>
+    </div>
+
+    <div class="scenario">
+      <h4>Forced base — Dark (Carto)</h4>
+      <p>
+        "Heat Map" and "Routes" live in <em>Night View</em> with
+        <code>forcedBaseLayerId: 'carto-dark'</code>. Enabling either
+        one switches the base to Dark automatically.
+      </p>
+    </div>
+
+    <div class="actions">
+      <button onclick="layersControl.showOverlay('heatmap')">Show Heat Map</button>
+      <button onclick="layersControl.hideOverlay('heatmap')">Hide Heat Map</button>
+      <button onclick="layersControl.showOverlay('routes')">Show Routes</button>
+      <button onclick="layersControl.hideOverlay('routes')">Hide Routes</button>
+      <button onclick="layersControl.setBaseLayer('osm')">Switch → OSM</button>
+      <button onclick="layersControl.setBaseLayer('carto-dark')">Switch → Dark</button>
+      <button onclick="logState()">Log state</button>
+    </div>
+
+    <div class="log" id="log"></div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist.min.js"></script>
+  <script src="../dist/js/all.min.js"></script>
+  <script>
+    // ── Logging ──────────────────────────────────────────────────────────────
+    function log(msg, type) {
+      const el = document.getElementById('log');
+      const div = document.createElement('div');
+      div.className = 'log-entry' + (type ? ' ' + type : '');
+      div.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+      el.insertBefore(div, el.firstChild);
+    }
+
+    // ── Base styles ──────────────────────────────────────────────────────────
+    const baseStyles = [
+      {
+        id: 'osm',
+        label: 'OpenStreetMap',
+        style: 'https://demotiles.maplibre.org/style.json',
+        strategy: 'setStyle'
+      },
+      {
+        id: 'carto-dark',
+        label: 'Dark (Carto)',
+        style: {
+          version: 8,
+          sources: {
+            'carto-dark': {
+              type: 'raster',
+              tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
+              tileSize: 256,
+              attribution: '© OpenStreetMap contributors © CARTO'
+            }
+          },
+          layers: [{ id: 'carto-dark-layer', type: 'raster', source: 'carto-dark' }]
+        },
+        strategy: 'setStyle'
+      }
+    ];
+
+    // ── Overlays ─────────────────────────────────────────────────────────────
+    const overlays = [
+      // Day View group — no forced base, stays on OSM
+      {
+        id: 'cities',
+        label: 'Cities',
+        group: 'Day View',
+        defaultVisible: true,
+        opacityControls: true,
+        deckLayers: [
+          {
+            id: 'cities-layer',
+            type: 'ScatterplotLayer',
+            props: {
+              data: [
+                { position: [-74.006,  40.713], name: 'New York'    },
+                { position: [-87.629,  41.878], name: 'Chicago'     },
+                { position: [-118.244, 34.052], name: 'Los Angeles' },
+                { position: [-95.369,  29.760], name: 'Houston'     },
+                { position: [-112.074, 33.448], name: 'Phoenix'     },
+                { position: [-75.165,  39.952], name: 'Philadelphia'},
+                { position: [-104.990, 39.739], name: 'Denver'      }
+              ],
+              getPosition:  d => d.position,
+              getRadius:    18000,
+              getFillColor: [255, 140, 0],
+              getLineColor: [255, 255, 255],
+              lineWidthMinPixels: 2,
+              pickable: true
+            }
+          }
+        ],
+        tooltip: 'name'
+      },
+
+      // Night View group — forcedBaseLayerId: 'carto-dark'
+      {
+        id: 'heatmap',
+        label: 'Heat Map',
+        group: 'Night View',
+        defaultVisible: false,
+        opacityControls: true,
+        forcedBaseLayerId: 'carto-dark',
+        viewport: {
+          center: [-96, 37],
+          zoom: 3.5
+        },
+        deckLayers: [
+          {
+            id: 'heatmap-layer',
+            type: 'HeatmapLayer',
+            props: {
+              data: [
+                { position: [-74.006,  40.713], weight: 1.0 },
+                { position: [-73.900,  40.750], weight: 0.8 },
+                { position: [-87.629,  41.878], weight: 0.9 },
+                { position: [-87.500,  41.800], weight: 0.7 },
+                { position: [-118.244, 34.052], weight: 1.0 },
+                { position: [-118.100, 33.900], weight: 0.6 },
+                { position: [-95.369,  29.760], weight: 0.8 },
+                { position: [-112.074, 33.448], weight: 0.7 },
+                { position: [-75.165,  39.952], weight: 0.9 },
+                { position: [-104.990, 39.739], weight: 0.6 },
+                { position: [-122.419, 37.774], weight: 1.0 },
+                { position: [-122.300, 37.800], weight: 0.7 },
+                { position: [-80.191,  25.774], weight: 0.8 }
+              ],
+              getPosition: d => d.position,
+              getWeight:   d => d.weight,
+              radiusPixels: 60,
+              intensity: 1,
+              threshold: 0.05
+            }
+          }
+        ]
+      },
+      {
+        id: 'routes',
+        label: 'Routes',
+        group: 'Night View',
+        defaultVisible: false,
+        opacityControls: true,
+        forcedBaseLayerId: 'carto-dark',
+        deckLayers: [
+          {
+            id: 'routes-layer',
+            type: 'ArcLayer',
+            props: {
+              data: [
+                { from: [-74.006, 40.713], to: [-87.629, 41.878]   },
+                { from: [-87.629, 41.878], to: [-118.244, 34.052]  },
+                { from: [-118.244, 34.052], to: [-95.369, 29.760]  },
+                { from: [-95.369, 29.760], to: [-112.074, 33.448]  },
+                { from: [-74.006, 40.713], to: [-75.165,  39.952]  },
+                { from: [-75.165, 39.952], to: [-80.191,  25.774]  },
+                { from: [-104.990, 39.739], to: [-118.244, 34.052] },
+                { from: [-74.006, 40.713], to: [-104.990, 39.739]  }
+              ],
+              getSourcePosition: d => d.from,
+              getTargetPosition: d => d.to,
+              getSourceColor: [255, 220,  50, 200],
+              getTargetColor: [ 50, 180, 255, 200],
+              getWidth: 3,
+              pickable: false
+            }
+          }
+        ]
+      }
+    ];
+
+    // ── Services ─────────────────────────────────────────────────────────────
+    const eventEmitter         = new EventEmitter();
+    const stateService         = new StateService(eventEmitter, 'group-forced-base-demo');
+    const mapService           = new MapService(eventEmitter);
+    const uiService            = new UIService(stateService, mapService, eventEmitter);
+    const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
+
+    // ── Control ──────────────────────────────────────────────────────────────
+    const layersControl = new LayersControl(
+      {
+        baseStyles,
+        overlays,
+        defaultBaseId: 'osm',
+        groups: [
+          { id: 'Day View',   label: 'Day View'   },
+          { id: 'Night View', label: 'Night View' }
+        ]
+      },
+      { stateService, uiService, mapService, businessLogicService, eventEmitter }
+    );
+
+    // ── Map ──────────────────────────────────────────────────────────────────
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: baseStyles[0].style,
+      center: [-96, 37],
+      zoom: 3.5
+    });
+
+    map.addControl(layersControl, 'top-left');
+
+    // ── Events ───────────────────────────────────────────────────────────────
+    layersControl
+      .on('basechange',         e => log(`basechange    → ${e.id}`, 'base'))
+      .on('styleload',          e => log(`styleload     → ${e.baseId}`, 'base'))
+      .on('overlaychange',      e => log(`overlaychange → ${e.id} ${e.visible ? 'on' : 'off'}`, 'overlay'))
+      .on('overlaygroupchange', e => log(`groupchange   → ${e.id} ${e.visible ? 'on' : 'off'}`, 'overlay'));
+
+    function logState() {
+      const s = layersControl.getCurrentState();
+      log('base:     ' + s.base);
+      log('overlays: ' + JSON.stringify(s.overlays));
+      log('groups:   ' + JSON.stringify(s.groups));
+      console.log('Full state:', s);
+    }
+  </script>
+</body>
+</html>

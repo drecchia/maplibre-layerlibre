@@ -40,10 +40,16 @@ class StateService {
     // ── Overlay state initialisation (called once per overlay on startup) ──
     initOverlay(id, config) {
         if (!this._state.overlays[id]) {
+            const visible = config.defaultVisible === true;
             this._state.overlays[id] = {
-                visible: config.defaultVisible === true,
+                visible,
                 opacity: (config.defaultOpacity !== undefined) ? config.defaultOpacity : 1.0
             };
+            // If the overlay belongs to a group and is visible, ensure the group
+            // state is initialized so the group checkbox renders correctly.
+            if (visible && config.group && !this._state.groups[config.group]) {
+                this._state.groups[config.group] = { visible: true, opacity: 1.0 };
+            }
         }
     }
 

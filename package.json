@@ -1,6 +1,6 @@
 {
     "name": "@drecchia/maplibre-layerlibre",
-    "version": "2.2.0",
+    "version": "2.2.1",
     "author": "Danilo T Recchia",
     "main": "dist/js/all.min.js",
     "files": [

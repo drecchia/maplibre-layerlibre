@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LayersControl — Group + defaultVisible Bug Fix Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist/stylesheet.min.css">
+  <link href="../dist/css/all.css" rel="stylesheet">
+  <style>
+    html, body, #map { height: 100%; margin: 0; padding: 0; }
+    #map { width: 100vw; height: 100vh; }
+
+    .panel {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: white;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+      max-width: 340px;
+      z-index: 1000;
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .panel h3 { margin: 0 0 8px 0; font-size: 15px; }
+    .panel p  { margin: 0 0 8px 0; color: #555; }
+
+    .check { color: #2a9d2a; font-weight: bold; }
+    .cross { color: #cc2222; font-weight: bold; }
+
+    .scenario {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .scenario h4 { margin: 0 0 4px 0; font-size: 13px; }
+    .scenario p  { margin: 0; font-size: 12px; color: #666; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .actions button {
+      flex: 1 1 auto;
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .actions button:hover { background: #f0f0f0; }
+
+    .log {
+      margin-top: 10px;
+      padding: 8px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      max-height: 120px;
+      overflow-y: auto;
+      font-size: 11px;
+      font-family: monospace;
+    }
+    .log-entry { margin: 1px 0; color: #333; }
+    .log-entry.ok   { color: #2a9d2a; }
+    .log-entry.warn { color: #cc7700; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="panel">
+    <h3>Group + <code>defaultVisible: true</code> fix</h3>
+    <p>
+      <strong>Bug:</strong> When an overlay with a <code>group</code> was added
+      with <code>defaultVisible: true</code>, the group checkbox rendered as
+      <span class="cross">unchecked</span> even though the deck.gl layer was
+      active — because group state was never seeded.<br><br>
+      <strong>Fix:</strong> <code>StateService.initOverlay()</code> now also
+      initialises <code>groups[groupId]</code> when the overlay is visible
+      and no prior group state exists.
+    </p>
+
+    <div class="scenario">
+      <h4>Scenario A — options.overlays at init time</h4>
+      <p>
+        "Cities" and "Routes" both start with <code>defaultVisible: true</code>
+        inside <code>group: 'Geo Data'</code>.<br>
+        <span class="check">Expected:</span> group checkbox <em>checked</em> on load,
+        both layers visible.
+      </p>
+    </div>
+
+    <div class="scenario">
+      <h4>Scenario B — runtime <code>addOverlay()</code></h4>
+      <p>
+        "Events" overlay is added at runtime with
+        <code>defaultVisible: true</code> inside <code>group: 'Live'</code>.<br>
+        <span class="check">Expected:</span> group checkbox <em>checked</em>
+        immediately, layer visible.
+      </p>
+    </div>
+
+    <div class="actions">
+      <button onclick="addRuntimeOverlay()">Add runtime overlay (Scenario B)</button>
+      <button onclick="removeRuntimeOverlay()">Remove it</button>
+      <button onclick="logState()">Log state</button>
+    </div>
+
+    <div class="log" id="log"></div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist.min.js"></script>
+  <script src="../dist/js/all.min.js"></script>
+  <script>
+    // ── Logging ──────────────────────────────────────────────────────────────
+    function log(msg, type) {
+      const el = document.getElementById('log');
+      const div = document.createElement('div');
+      div.className = 'log-entry' + (type ? ' ' + type : '');
+      div.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+      el.insertBefore(div, el.firstChild);
+    }
+
+    // ── Base styles ──────────────────────────────────────────────────────────
+    const baseStyles = [
+      {
+        id: 'osm',
+        label: 'OpenStreetMap',
+        style: 'https://demotiles.maplibre.org/style.json',
+        strategy: 'setStyle'
+      }
+    ];
+
+    // ── Scenario A overlays (defined at init time) ───────────────────────────
+    // Both overlays belong to 'Geo Data' and are defaultVisible: true.
+    // Bug: group checkbox was unchecked because group state was never seeded.
+    const overlays = [
+      {
+        id: 'cities',
+        label: 'Cities',
+        group: 'Geo Data',
+        defaultVisible: true,
+        opacityControls: true,
+        deckLayers: [
+          {
+            id: 'cities-layer',
+            type: 'ScatterplotLayer',
+            props: {
+              data: [
+                { position: [-74.006,  40.713], name: 'New York'    },
+                { position: [-87.629,  41.878], name: 'Chicago'     },
+                { position: [-118.244, 34.052], name: 'Los Angeles' },
+                { position: [-95.369,  29.760], name: 'Houston'     },
+                { position: [-112.074, 33.448], name: 'Phoenix'     }
+              ],
+              getPosition:  d => d.position,
+              getRadius:    18000,
+              getFillColor: [255, 140, 0],
+              getLineColor: [255, 255, 255],
+              lineWidthMinPixels: 2,
+              pickable: true
+            }
+          }
+        ],
+        tooltip: 'name'
+      },
+      {
+        id: 'routes',
+        label: 'Routes',
+        group: 'Geo Data',
+        defaultVisible: true,
+        opacityControls: true,
+        deckLayers: [
+          {
+            id: 'routes-layer',
+            type: 'ArcLayer',
+            props: {
+              data: [
+                { from: [-74.006, 40.713], to: [-87.629, 41.878]   },
+                { from: [-87.629, 41.878], to: [-118.244, 34.052]  },
+                { from: [-118.244, 34.052], to: [-95.369, 29.760]  },
+                { from: [-95.369, 29.760], to: [-112.074, 33.448]  }
+              ],
+              getSourcePosition: d => d.from,
+              getTargetPosition: d => d.to,
+              getSourceColor: [255, 200, 0, 180],
+              getTargetColor: [0, 120, 255, 180],
+              getWidth: 3,
+              pickable: false
+            }
+          }
+        ]
+      },
+      // This overlay is in a different group and starts hidden — group should
+      // NOT appear checked on load (validates the guard).
+      {
+        id: 'hidden-layer',
+        label: 'Initially Hidden',
+        group: 'Optional',
+        defaultVisible: false,
+        deckLayers: [
+          {
+            id: 'hidden-layer-deck',
+            type: 'ScatterplotLayer',
+            props: {
+              data: [{ position: [-100, 40], name: 'Hidden' }],
+              getPosition:  d => d.position,
+              getRadius:    30000,
+              getFillColor: [150, 150, 150],
+              pickable: true
+            }
+          }
+        ],
+        tooltip: 'name'
+      }
+    ];
+
+    // ── Services ─────────────────────────────────────────────────────────────
+    const eventEmitter        = new EventEmitter();
+    const stateService        = new StateService(eventEmitter, 'group-default-visible-demo');
+    const mapService          = new MapService(eventEmitter);
+    const uiService           = new UIService(stateService, mapService, eventEmitter);
+    const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
+
+    // ── Control ──────────────────────────────────────────────────────────────
+    const layersControl = new LayersControl(
+      {
+        baseStyles,
+        overlays,
+        defaultBaseId: 'osm',
+        groups: [
+          { id: 'Geo Data', label: 'Geo Data'  },
+          { id: 'Optional', label: 'Optional'  },
+          { id: 'Live',     label: 'Live Events' }
+        ]
+      },
+      { stateService, uiService, mapService, businessLogicService, eventEmitter }
+    );
+
+    // ── Map ──────────────────────────────────────────────────────────────────
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: baseStyles[0].style,
+      center: [-96, 37],
+      zoom: 3.5
+    });
+
+    map.addControl(layersControl, 'top-left');
+
+    // ── Events ───────────────────────────────────────────────────────────────
+    layersControl
+      .on('overlaychange',      e => log(`overlaychange → ${e.id} ${e.visible ? 'on' : 'off'}`, e.visible ? 'ok' : ''))
+      .on('overlaygroupchange', e => log(`groupchange   → ${e.id} ${e.visible ? 'on' : 'off'}`, e.visible ? 'ok' : ''));
+
+    // ── Scenario B — runtime addOverlay ──────────────────────────────────────
+    let runtimeAdded = false;
+
+    function addRuntimeOverlay() {
+      if (runtimeAdded) { log('already added', 'warn'); return; }
+
+      layersControl.addOverlay({
+        id: 'events',
+        label: 'Live Events',
+        group: 'Live',
+        defaultVisible: true,          // <-- must make group checkbox checked
+        opacityControls: true,
+        deckLayers: [
+          {
+            id: 'events-layer',
+            type: 'ScatterplotLayer',
+            props: {
+              data: [
+                { position: [-77.036, 38.907], name: 'Washington DC' },
+                { position: [-71.058, 42.360], name: 'Boston'        },
+                { position: [-80.226, 25.779], name: 'Miami'         }
+              ],
+              getPosition:  d => d.position,
+              getRadius:    15000,
+              getFillColor: [0, 200, 120],
+              getLineColor: [255, 255, 255],
+              lineWidthMinPixels: 2,
+              pickable: true
+            }
+          }
+        ],
+        tooltip: 'name'
+      });
+
+      runtimeAdded = true;
+      log('runtime overlay added — group "Live" should be checked', 'ok');
+    }
+
+    function removeRuntimeOverlay() {
+      if (!runtimeAdded) { log('nothing to remove', 'warn'); return; }
+      layersControl.removeOverlay('events');
+      runtimeAdded = false;
+      log('runtime overlay removed');
+    }
+
+    function logState() {
+      const s = layersControl.getCurrentState();
+      log('overlays: ' + JSON.stringify(s.overlays));
+      log('groups:   ' + JSON.stringify(s.groups));
+      console.log('Full state:', s);
+    }
+  </script>
+</body>
+</html>
