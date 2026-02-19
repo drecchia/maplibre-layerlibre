@@ -1,4 +1,4 @@
-# Architecture — `@drecchia/maplibre-layer-control`
+# Architecture — `@drecchia/maplibre-layerlibre`
 
 ---
 

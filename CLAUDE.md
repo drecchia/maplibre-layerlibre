@@ -2,7 +2,7 @@
 
 ## Project overview
 
-`@drecchia/maplibre-layer-control` is a vanilla-JS layer-switcher control for
+`@drecchia/maplibre-layerlibre` is a vanilla-JS layer-switcher control for
 [MapLibre GL JS](https://maplibre.org/) that renders overlays via
 [deck.gl](https://deck.gl/) (`MapboxOverlay`).  It implements the MapLibre
 `IControl` interface and exposes a clean public API for controlling base

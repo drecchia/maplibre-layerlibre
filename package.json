@@ -1,5 +1,5 @@
 {
-    "name": "@drecchia/maplibre-layer-control",
+    "name": "@drecchia/maplibre-layerlibre",
     "version": "2.2.0",
     "author": "Danilo T Recchia",
     "main": "dist/js/all.min.js",
@@ -10,9 +10,9 @@
     "license": "CC-BY-NC-4.0",
     "repository": {
         "type": "git",
-        "url": "https://github.com/drecchia/maplibre-layer-control.git"
+        "url": "https://github.com/drecchia/maplibre-layerlibre.git"
     },
-    "description": "MapLibre Layer Control, the best independent layer control tool.",
+    "description": "MapLibre LayerLibre — a compact layer-switcher control for MapLibre GL JS with deck.gl overlay support.",
     "keywords": [
         "layer",
         "control",

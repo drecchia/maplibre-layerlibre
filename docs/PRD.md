@@ -1,6 +1,6 @@
-# Product Requirements Document — `maplibre-layer-control`
+# Product Requirements Document — `maplibre-layerlibre`
 
-**Package:** `@drecchia/maplibre-layer-control`
+**Package:** `@drecchia/maplibre-layerlibre`
 **Version:** 2.x
 **Author:** Danilo T. Recchia
 **License:** CC-BY-NC-4.0
@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-`maplibre-layer-control` is a vanilla JavaScript layer-management control for [MapLibre GL JS](https://maplibre.org/). It renders as a collapsible panel attached to the map (via the standard MapLibre control interface) and provides:
+`maplibre-layerlibre` is a vanilla JavaScript layer-management control for [MapLibre GL JS](https://maplibre.org/). It renders as a collapsible panel attached to the map (via the standard MapLibre control interface) and provides:
 
 - **Base map switching** — radio-button selector among configured base styles.
 - **Overlay management** — checkbox toggles for deck.gl overlays, with optional opacity sliders.

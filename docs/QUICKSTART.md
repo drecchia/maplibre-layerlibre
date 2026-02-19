@@ -1,4 +1,4 @@
-# Quickstart — `@drecchia/maplibre-layer-control`
+# Quickstart — `@drecchia/maplibre-layerlibre`
 
 Minimal, copy-paste example to get `LayersControl` running with MapLibre GL JS and deck.gl.
 

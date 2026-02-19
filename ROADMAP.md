@@ -1,6 +1,6 @@
 # Roadmap
 
-Planned improvements and known issues for `@drecchia/maplibre-layer-control`.
+Planned improvements and known issues for `@drecchia/maplibre-layerlibre`.
 
 Items are grouped by release target. Items without a version are unscheduled.
 

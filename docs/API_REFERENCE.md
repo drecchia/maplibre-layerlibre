@@ -1,6 +1,6 @@
 # API Reference — LayersControl
 
-Public API for the `@drecchia/maplibre-layer-control` library. All classes are global variables available from `dist/js/all.min.js`.
+Public API for the `@drecchia/maplibre-layerlibre` library. All classes are global variables available from `dist/js/all.min.js`.
 
 ---
 
