@@ -1,115 +1,130 @@
-# Quickstart — LayersControl (MapLibre)
+# Quickstart — `@drecchia/maplibre-layer-control`
 
-Minimal, copy-paste example to get LayersControl running with MapLibre GL JS and deck.gl, reflecting the actual implementation.
+Minimal, copy-paste example to get `LayersControl` running with MapLibre GL JS and deck.gl.
 
 ---
 
-## 1. Install / Include
+## 1. Include scripts
 
-- Include MapLibre GL JS and deck.gl in your page.
-- Include the built LayersControl script (UMD/ES build).
-- Include the CSS file for correct UI.
-
-**Example (HTML):**
 ```html
-<script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
-<script src="https://unpkg.com/deck.gl/dist.min.js"></script>
-<script src="path/to/layers-control.js"></script>
-<link rel="stylesheet" href="path/to/main.css">
+<!-- MapLibre GL JS -->
+<link href="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.js"></script>
+
+<!-- deck.gl (must be present as window.deck) -->
+<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist.min.js"></script>
+
+<!-- LayersControl bundle (exposes globals: EventEmitter, StateService, MapService,
+     UIService, BusinessLogicService, LayersControl, BoundsHelper) -->
+<script src="dist/js/all.min.js"></script>
+<link rel="stylesheet" href="dist/css/all.css">
 ```
 
 ---
 
-## 2. Minimal Initialization
+## 2. Minimal initialisation
 
-```javascript
-const baseStyles = [
-  {
-    id: 'osm',
-    label: 'OpenStreetMap',
-    style: 'https://demotiles.maplibre.org/style.json',
-    strategy: 'setStyle'
-  }
-];
+All five services must be instantiated and passed to `LayersControl`. There is no shorthand constructor.
 
-// Overlays must use deckLayers or renderOnClick. MapLibre source/layers are NOT supported.
-const overlays = [
-  {
-    id: 'traffic',
-    label: 'Traffic Flow',
-    deckLayers: [
-      {
-        id: 'traffic-lines',
-        type: 'LineLayer', // deck.gl layer type
-        props: {
-          data: [ /* your line data here */ ],
-          getSourcePosition: d => d.from,
-          getTargetPosition: d => d.to,
-          getColor: [255,0,0],
-          getWidth: 2
+```js
+// ── 1. Services ───────────────────────────────────────────────────────────
+const eventEmitter         = new EventEmitter();
+const stateService         = new StateService(eventEmitter, 'my-app-layers'); // second arg = localStorage key
+const mapService           = new MapService(eventEmitter);
+const uiService            = new UIService(stateService, mapService, eventEmitter);
+const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
+
+// ── 2. Options ────────────────────────────────────────────────────────────
+const options = {
+  baseStyles: [
+    {
+      id: 'osm',
+      label: 'OpenStreetMap',
+      style: 'https://demotiles.maplibre.org/style.json',
+      strategy: 'setStyle'
+    }
+  ],
+  overlays: [
+    {
+      id: 'my-points',
+      label: 'My Points',
+      deckLayers: [
+        {
+          id: 'my-points-layer',
+          type: 'ScatterplotLayer',
+          props: {
+            data: [{ position: [0, 0], name: 'Origin' }],
+            getPosition: d => d.position,
+            getRadius: 10000,
+            getFillColor: [255, 0, 0],
+            pickable: true
+          }
         }
-      }
-    ],
-    opacityControls: true,
-    defaultVisible: false
-  }
-  // For dynamic overlays, use renderOnClick (see RENDER_ON_CLICK.md)
-];
+      ],
+      tooltip: 'name',
+      defaultVisible: false,
+      opacityControls: true
+    }
+  ],
+  defaultBaseId: 'osm'
+};
 
-const layersControl = new LayersControl({
-  baseStyles,
-  overlays,
-  defaultBaseId: 'osm',
-  // optional: enable persistence
-  // persist: { localStorageKey: 'my-app-layers' },
-  position: 'top-right'
+// ── 3. Control ────────────────────────────────────────────────────────────
+const layersControl = new LayersControl(options, {
+  stateService,
+  uiService,
+  mapService,
+  businessLogicService,
+  eventEmitter
 });
 
+// ── 4. Map ────────────────────────────────────────────────────────────────
 const map = new maplibregl.Map({
   container: 'map',
-  style: LayersControl.getInitialStyle({
-    baseStyles,
-    defaultBaseId: 'osm',
-  // optional: enable persistence
-  // persist: { localStorageKey: 'my-app-layers' }
-  }) || 'https://demotiles.maplibre.org/style.json',
+  style: options.baseStyles[0].style,
   center: [0, 0],
   zoom: 2
 });
 
-map.on('load', () => {
-  layersControl.addTo(map);
-
-  // Optionally restore viewport from persisted state
-  const vp = LayersControl.getInitialViewport({ persist: { localStorageKey: 'my-app-layers' } }); // optional
-  if (vp) map.jumpTo(vp);
-});
+map.addControl(layersControl, 'top-left');
 ```
 
 ---
 
-## 3. Persistence
+## 3. State persistence
 
-- User choices (base map, overlays, opacity, viewport) are saved in `localStorage` at the key you specify.
-- State is restored automatically if the key exists.
+Pass a unique string as the second argument to `StateService`. State (base layer, overlay visibility/opacity, viewport) is automatically saved to `localStorage` under that key and restored on the next page load.
+
+```js
+const stateService = new StateService(eventEmitter, 'my-app-layers');
+```
+
+Use different keys for different pages or control instances to avoid collisions between examples.
+
+To clear persisted state programmatically:
+```js
+layersControl.clearPersistedData();
+```
 
 ---
 
-## 4. CSS Customization
+## 4. Events
 
-- All UI classes are defined in `src/css/main.css`.
-- To customize appearance, override these classes in your own CSS:
-  - `.layers-control-panel`
-  - `.overlay-status`
-  - `.opacity-slider`
-  - `.maplibregl-ctrl.layers-control`
-- See [CSS.md](./CSS.md) for a full class reference.
+```js
+layersControl
+  .on('basechange',    ({ id }) => console.log('Base changed to', id))
+  .on('overlaychange', ({ id, visible, opacity }) => console.log(id, visible))
+  .on('error',         ({ id, error }) => console.error(id, error));
+```
+
+See [EVENTS.md](./EVENTS.md) for the full catalogue.
 
 ---
 
 ## 5. Notes
 
-- Only `deckLayers` and `renderOnClick` overlays are supported. MapLibre `source`/`layers`/`layerIds` are NOT supported.
-- For dynamic overlays, see [RENDER_ON_CLICK.md](./RENDER_ON_CLICK.md).
-- For configuration options, see [CONFIGURATION.md](./CONFIGURATION.md).
+- `deck.gl` must be loaded as `window.deck` before the control is initialised.
+- All overlays are deck.gl overlays (`deckLayers` or `onChecked`). Native MapLibre source/layer overlays are not supported.
+- For dynamic async overlays, see [RENDER_ON_CLICK.md](./RENDER_ON_CLICK.md) (`onChecked`).
+- For all configuration options, see [CONFIGURATION.md](./CONFIGURATION.md).
 - For API details, see [API_REFERENCE.md](./API_REFERENCE.md).

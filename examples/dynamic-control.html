@@ -109,13 +109,23 @@
 
     let layersControl = null;
 
+    function createServices() {
+      const eventEmitter = new EventEmitter();
+      const stateService = new StateService(eventEmitter, 'layersControlState');
+      const mapService = new MapService(eventEmitter);
+      const uiService = new UIService(stateService, mapService, eventEmitter);
+      const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
+      return { eventEmitter, stateService, mapService, uiService, businessLogicService };
+    }
+
     document.getElementById('add-control').onclick = function() {
       if (!layersControl) {
+        const services = createServices();
         layersControl = new LayersControl({
           baseStyles: baseStyles,
           overlays: overlays,
           defaultBaseId: 'osm'
-        });
+        }, services);
         map.addControl(layersControl, 'top-left');
       }
     };

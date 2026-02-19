@@ -1,13 +1,6 @@
-# LayersControl — MapLibre Layer Manager
+# maplibre-layerlibre
 
-A compact, modern, and extensible layer control for MapLibre GL JS, designed for production apps needing:
-
-- Fast, testable code with clear separation of concerns
-- Flexible UX: grouping, per-overlay and group opacity, pan-on-add
-- Dynamic data loading via `renderOnClick` (async overlays)
-- Deck.gl integration for high-performance overlays
-- State persistence (base, overlays, opacity, order, viewport)
-- Event-driven API for analytics, telemetry, or custom UI
+A compact layer-switcher control for [MapLibre GL JS](https://maplibre.org/) with [deck.gl](https://deck.gl/) overlay support.
 
 ![UI interaction](docs/img01.gif)
 ![Dynamic loader](docs/img02.gif)
@@ -16,151 +9,269 @@ A compact, modern, and extensible layer control for MapLibre GL JS, designed for
 
 ## Features
 
-- Base map switching (`setStyle` or `toggleBackground` strategies)
-- Overlay grouping and group-level opacity
-- Per-overlay opacity sliders and status indicators (loading/error/zoom-filtered)
-- `panOnAdd`: fly to overlay location on enable
-- `renderOnClick`: async remote overlay loader (with caching and retry)
-- State persistence: base, overlays, opacity, order, viewport (via `localStorage`)
-- Event system for all state changes and overlay lifecycle
-- Works with MapLibre and optionally deck.gl
+- **Base map switching** — radio-button selector, `setStyle` strategy
+- **deck.gl overlays** — static `deckLayers` or lazy-loaded via `onChecked` callback
+- **Overlay groups** — group-level visibility toggle and opacity control
+- **Per-overlay opacity sliders** and status indicators (loading / error / zoom-filtered)
+- **Viewport targeting** — `fitBounds`, `center+zoom`, `bearing`, `pitch` applied on activation
+- **Forced base layer** — overlay can require a specific base style before activating
+- **State persistence** — base, overlays, opacity, viewport saved to `localStorage`
+- **Zoom filtering** — overlays hidden automatically outside `minZoomLevel`/`maxZoomLevel`
+- **Event-driven API** — all state changes emit typed events
+- **Dark theme + responsive** — CSS media queries included
 
 ---
 
 ## Installation
 
-Include MapLibre GL JS, deck.gl, LayersControl JS, and CSS in your page:
+Load MapLibre GL JS, deck.gl, and the LayersControl bundle from CDN, then build with `npm run build` to produce `dist/js/all.min.js` and `dist/css/all.css`.
 
 ```html
-<script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
-<script src="https://unpkg.com/deck.gl/dist.min.js"></script>
-<script src="path/to/layers-control.js"></script>
-<link rel="stylesheet" href="path/to/main.css">
+<link href="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.css" rel="stylesheet">
+<link href="dist/css/all.css" rel="stylesheet">
+
+<script src="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist.min.js"></script>
+<script src="dist/js/all.min.js"></script>
+```
+
+Build the bundle:
+
+```bash
+npm install
+npm run build   # → dist/js/all.min.js + dist/css/all.css
 ```
 
 ---
 
-## Usage (Minimal Example)
+## Quick Start
 
-```javascript
+All classes (`EventEmitter`, `StateService`, `MapService`, `UIService`, `BusinessLogicService`, `LayersControl`, `BoundsHelper`) are globals exposed by the bundle.
+
+```html
+<div id="map"></div>
+<script>
 const baseStyles = [
-  { id: 'osm', label: 'OpenStreetMap', style: 'https://demotiles.maplibre.org/style.json', strategy: 'setStyle' }
+  {
+    id: 'osm',
+    label: 'OpenStreetMap',
+    style: 'https://demotiles.maplibre.org/style.json',
+    strategy: 'setStyle'
+  }
 ];
 
 const overlays = [
   {
-    id: 'traffic',
-    label: 'Traffic Flow',
+    id: 'cities',
+    label: 'Major Cities',
     deckLayers: [
       {
-        id: 'traffic-lines',
-        type: 'LineLayer',
+        id: 'cities-layer',
+        type: 'ScatterplotLayer',
         props: {
-          data: [ /* your line data */ ],
-          getSourcePosition: d => d.from,
-          getTargetPosition: d => d.to,
-          getColor: [255,0,0],
-          getWidth: 2
+          data: [
+            { position: [-74.0, 40.7], name: 'New York' },
+            { position: [-87.6, 41.9], name: 'Chicago' },
+            { position: [-118.2, 34.0], name: 'Los Angeles' }
+          ],
+          getPosition: d => d.position,
+          getRadius: 20000,
+          getFillColor: [255, 100, 0],
+          pickable: true
         }
       }
     ],
-    opacityControls: true,
-    defaultVisible: false
+    tooltip: 'name',
+    defaultVisible: true,
+    opacityControls: true
   }
 ];
 
-const layersControl = new LayersControl({
-  baseStyles,
-  overlays,
-  defaultBaseId: 'osm',
-  persist: { localStorageKey: 'my-app-layers' },
-  position: 'top-right'
-});
+// ── Instantiate services ───────────────────────────────────────────────────
+const eventEmitter         = new EventEmitter();
+const stateService         = new StateService(eventEmitter, 'my-app-layers'); // localStorage key
+const mapService           = new MapService(eventEmitter);
+const uiService            = new UIService(stateService, mapService, eventEmitter);
+const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
 
+const layersControl = new LayersControl(
+  { baseStyles, overlays, defaultBaseId: 'osm' },
+  { stateService, uiService, mapService, businessLogicService, eventEmitter }
+);
+
+// ── Create map and add control ─────────────────────────────────────────────
 const map = new maplibregl.Map({
   container: 'map',
-  style: LayersControl.getInitialStyle({
-    baseStyles,
-    defaultBaseId: 'osm',
-    persist: { localStorageKey: 'my-app-layers' }
-  }) || baseStyles[0].style,
-  center: [0, 0],
-  zoom: 2
+  style: baseStyles[0].style,
+  center: [-95, 40],
+  zoom: 3
 });
 
-map.on('load', () => {
-  layersControl.addTo(map);
-  const vp = LayersControl.getInitialViewport({ persist: { localStorageKey: 'my-app-layers' } });
-  if (vp) map.jumpTo(vp);
-});
+map.addControl(layersControl, 'top-left');
+
+// ── Subscribe to events ────────────────────────────────────────────────────
+layersControl
+  .on('basechange',    e => console.log('base →', e.id))
+  .on('overlaychange', e => console.log('overlay →', e.id, e.visible))
+  .on('error',         e => console.error('error →', e.id, e.error));
+</script>
 ```
 
 ---
 
-## Configuration
+## Dynamic Overlays (`onChecked`)
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options and persisted state schema.
+Use `onChecked` to load data lazily — only when the user first activates the overlay:
 
-- `baseStyles`: Array of base map styles (id, label, style, strategy)
-- `overlays`: Array of overlays (id, label, group, deckLayers, renderOnClick, opacityControls, etc.)
-- `groups`: Optional array for overlay grouping
-- `persist`: `{ localStorageKey }` for state persistence
-- `position`: MapLibre control position
-- `i18n`: Label translation function
-- `autoClose`, `showOpacity`, `showLegends`: UI options
+```js
+{
+  id: 'live-data',
+  label: 'Live Data',
+  onChecked: async (context) => {
+    if (context.getCache()) return;           // skip if already loaded
+
+    const data = await fetch('/api/data').then(r => r.json());
+
+    context.setOverlayConfig({
+      deckLayers: [{
+        id: 'live-layer',
+        type: 'ScatterplotLayer',
+        props: { data, getPosition: d => d.position, getRadius: 5000, getFillColor: [0, 180, 255], pickable: true }
+      }]
+    });
+
+    context.setCache({ loaded: true });       // prevent re-fetch
+  },
+  tooltip: 'name',
+  defaultVisible: false
+}
+```
+
+The `loading`, `success`, and `error` events fire automatically. An in-UI retry button appears on failure.
 
 ---
 
-## Supported Overlay Types
+## Viewport Targeting
 
-- Only `deckLayers` and `renderOnClick` overlays are supported.
-- MapLibre `source`/`layers` overlays are NOT supported.
+Fit the map to specific bounds when an overlay is activated:
 
-See [docs/RENDER_ON_CLICK.md](docs/RENDER_ON_CLICK.md) for the dynamic overlay contract.
+```js
+{
+  id: 'usa-cities',
+  label: 'USA Cities',
+  viewport: {
+    fitBounds: BoundsHelper.calculateBounds(usaData.map(d => d.position))
+  },
+  deckLayers: [...]
+}
+```
+
+Or pan to a specific location:
+
+```js
+viewport: { center: [-74.0, 40.7], zoom: 10, bearing: 45, pitch: 30 }
+```
+
+---
+
+## Overlay Groups
+
+```js
+const groups  = [{ id: 'transport', label: 'Transport' }];
+const overlays = [
+  { id: 'roads',   label: 'Roads',   group: 'transport', deckLayers: [...] },
+  { id: 'transit', label: 'Transit', group: 'transport', deckLayers: [...] }
+];
+```
+
+The group header shows an all-at-once visibility toggle and (optionally) a shared opacity slider.
+
+---
+
+## Runtime API
+
+```js
+// Base layers
+layersControl.setBaseLayer('satellite');
+layersControl.addBaseStyle({ id: 'terrain', label: 'Terrain', style: '...', strategy: 'setStyle' });
+
+// Overlays
+layersControl.addOverlay({ id: 'new', label: 'New Layer', deckLayers: [...] });
+layersControl.showOverlay('my-overlay');
+layersControl.hideOverlay('my-overlay');
+layersControl.setOverlayOpacity('my-overlay', 0.5);
+layersControl.removeOverlay('my-overlay');
+
+// Groups
+layersControl.showGroup('transport');
+layersControl.setGroupOpacity('transport', 0.7);
+
+// Persistence
+layersControl.clearPersistedData();
+
+// State
+const state = layersControl.getCurrentState();
+```
+
+---
+
+## Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `baseStyles` | `Array` | required | Base map styles |
+| `overlays` | `Array` | required | Overlay definitions |
+| `groups` | `Array` | `[]` | Group metadata |
+| `defaultBaseId` | `string` | `null` | Initial active base style |
+| `showOpacity` | `boolean` | `true` | Show opacity sliders |
+| `autoClose` | `boolean` | `false` | Close panel after base selection |
+| `icon` | `string` | `'☰'` | Toggle button icon |
+| `i18n` | `object` | see docs | UI string overrides `{ baseHeader, overlaysHeader }` |
+
+**Persistence** is configured via `new StateService(eventEmitter, 'your-key')` — the second argument is the `localStorage` key.
+
+**Control position** is set via `map.addControl(layersControl, 'top-left')` (standard MapLibre API).
 
 ---
 
 ## Events
 
-LayersControl emits events for all state changes and overlay lifecycle:
-
-- `basechange`, `overlaychange`, `overlaygroupchange`, `change`
-- `loading`, `success`, `error`
-- `styleload`, `sourceloaded`, `viewportchange`, `zoomfilter`, `memorycleared`
-
-See [docs/EVENTS.md](docs/EVENTS.md) for event payloads and usage.
-
----
-
-## Persistence
-
-- State is saved to `localStorage` under the configured key.
-- Persisted: baseId, overlays (visibility, opacity), groups, layerOrder, viewport.
+| Event | Payload | When |
+|-------|---------|------|
+| `basechange` | `{ id }` | Active base style changed |
+| `overlaychange` | `{ id, visible, opacity }` | Overlay visibility or opacity changed |
+| `overlaygroupchange` | `{ id, visible }` | Group visibility changed |
+| `loading` | `{ id }` | `onChecked` callback started |
+| `success` | `{ id }` | `onChecked` completed |
+| `error` | `{ id, error }` | Activation failed |
+| `styleload` | `{ baseId }` | Base style finished loading |
+| `zoomfilter` | `{ id, filtered }` | Overlay shown/hidden by zoom |
+| `viewportchange` | `{ center, zoom, ... }` | Viewport saved |
+| `memorycleared` | `{}` | localStorage cleared |
 
 ---
 
-## CSS Customization
+## Documentation
 
-All UI classes are defined in [src/css/main.css](src/css/main.css).  
-Override these classes in your own CSS for custom themes or layout.
-
-See [docs/CSS.md](docs/CSS.md) for a full class reference.
+| Doc | Contents |
+|-----|----------|
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | Setup guide and minimal examples |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full options reference |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | All public methods and return values |
+| [docs/ONECHECKED.md](docs/ONECHECKED.md) | `onChecked` dynamic overlay contract |
+| [docs/EVENTS.md](docs/EVENTS.md) | Event payloads and subscription patterns |
+| [docs/CSS.md](docs/CSS.md) | BEM class reference and customization |
+| [docs/WORKFLOWS.md](docs/WORKFLOWS.md) | Runtime flows and lifecycle |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal service design |
 
 ---
 
-## Reference & Further Documentation
+## Browser Support
 
-- [docs/QUICKSTART.md](docs/QUICKSTART.md): Quickstart and minimal examples
-- [docs/API_REFERENCE.md](docs/API_REFERENCE.md): Full API and method signatures
-- [docs/CONFIGURATION.md](docs/CONFIGURATION.md): Options schema and persisted state
-- [docs/RENDER_ON_CLICK.md](docs/RENDER_ON_CLICK.md): Dynamic overlays contract
-- [docs/EVENTS.md](docs/EVENTS.md): Emitted events and payloads
-- [docs/CSS.md](docs/CSS.md): CSS class names and styling
-- [docs/WORKFLOWS.md](docs/WORKFLOWS.md): Runtime workflows
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Internal design and responsibilities
+Any modern browser supporting ES2020+. No bundler required — the library is a concatenated, minified global script.
 
 ---
 
 ## License
 
-MIT (see LICENSE)
+[CC-BY-NC-4.0](https://creativecommons.org/licenses/by-nc/4.0/) — non-commercial use only.

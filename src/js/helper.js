@@ -96,10 +96,12 @@ class BoundsHelper {
         const lngDiff = maxLng - minLng;
         const latDiff = maxLat - minLat;
         
-        // Calculate zoom level to fit bounds
-        // This is a simplified calculation - MapLibre's fitBounds uses more sophisticated math
-        const lngZoom = Math.log2(360 / lngDiff) - Math.log2(container.width / 256);
-        const latZoom = Math.log2(180 / latDiff) - Math.log2(container.height / 256);
+        // Calculate zoom level to fit bounds.
+        // MapLibre calibrates zoom so the world is 512px wide at zoom 0 (one 512px tile).
+        // At zoom N: world_width = 512 * 2^N px, so fitting lngDiff in container.width gives:
+        //   container.width = 512 * 2^N * (lngDiff / 360)  →  N = log2(360 * width / (512 * lngDiff))
+        const lngZoom = Math.log2(360 * container.width / (512 * lngDiff));
+        const latZoom = Math.log2(180 * container.height / (512 * latDiff));
         
         // Use the smaller zoom to ensure both dimensions fit, with padding
         const calculatedZoom = Math.min(lngZoom, latZoom) - padding;

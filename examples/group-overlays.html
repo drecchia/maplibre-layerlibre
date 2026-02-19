@@ -118,6 +118,12 @@
       }
     ];
 
+    const eventEmitter = new EventEmitter();
+    const stateService = new StateService(eventEmitter, 'layersControlState');
+    const mapService = new MapService(eventEmitter);
+    const uiService = new UIService(stateService, mapService, eventEmitter);
+    const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
+
     const map = new maplibregl.Map({
       container: 'map',
       style: baseStyles[0].style,
@@ -128,8 +134,13 @@
     const layersControl = new LayersControl({
       baseStyles: baseStyles,
       overlays: overlays,
-      groups: groups,
       defaultBaseId: 'osm'
+    }, {
+      stateService,
+      uiService,
+      mapService,
+      businessLogicService,
+      eventEmitter
     });
 
     map.addControl(layersControl, 'top-left');

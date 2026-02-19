@@ -10,34 +10,42 @@ exports.all = (cb) => {
 
 const dist = {
     'files': [
+        // Utilities
         'src/js/helper.js',
-        'src/js/stateManager.js',
+        // Core services (dependency order)
+        'src/js/eventEmitter.js',
+        'src/js/stateService.js',
+        'src/js/mapService.js',
+        // UI (deck.gl + DOM rendering)
         'src/js/uiManager.js',
+        // Business logic (depends on all of the above)
+        'src/js/businessLogicService.js',
+        // Public facade
         'src/js/layersControl.js',
     ],
     'outputFolder': 'dist/js',
-}
+};
 
-// Transpile the specified JS files to a concatenated and minified file
-const AllInOne = (cb, input, output) => {
+// Concatenate and minify JS files
+const AllInOne = (cb) => {
     return src(dist.files)
-        .pipe(concat('all.js'))    
+        .pipe(concat('all.js'))
         .pipe(uglify())
-        .on('error', (err) => {
-            console.error('Error:', err.message);
-            this.emit('end'); // Continue on error
+        .on('error', function(err) {
+            console.error('Uglify error:', err.message);
+            this.emit('end');
         })
         .pipe(concat('all.min.js'))
         .pipe(dest(dist.outputFolder));
 };
 
-/** Put a watch on all files. */
-exports.watch = JSwatch = cb => {
+/** Watch for changes and recompile. */
+exports.watch = (cb) => {
     return watch(dist.files)
         .on('change', path => {
-            console.log('Change detected to .js file "' + path + '"');
+            console.log(`Change detected: "${path}"`);
             series(AllInOne)(() => {
                 console.log('JS compiled and concatenated.');
             });
-    });
+        });
 };

@@ -235,8 +235,8 @@
 					await new Promise(resolve => setTimeout(resolve, 2000));
 
 					// Update overlay configuration
-                    context.setOverlayConfig({
-                        deckLayers: [
+					context.setOverlayConfig({
+						deckLayers: [
 							{
 								id: 'loading-layer',
 								type: 'ScatterplotLayer',
@@ -253,7 +253,7 @@
 								}
 							}
 						],
-                    });
+					});
 				},
 				defaultVisible: false,
 				viewport: {
@@ -262,6 +262,12 @@
 				},
 			}
 		];
+
+		const eventEmitter = new EventEmitter();
+		const stateService = new StateService(eventEmitter, 'layersControlState');
+		const mapService = new MapService(eventEmitter);
+		const uiService = new UIService(stateService, mapService, eventEmitter);
+		const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
 
 		const map = new maplibregl.Map({
 			container: 'map',
@@ -274,6 +280,12 @@
 			baseStyles: baseStyles,
 			overlays: overlays,
 			defaultBaseId: 'osm'
+		}, {
+			stateService,
+			uiService,
+			mapService,
+			businessLogicService,
+			eventEmitter
 		});
 
 		map.addControl(layersControl, 'top-left');

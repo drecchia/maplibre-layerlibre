@@ -1,751 +1,489 @@
 /**
- * LayersControl - Main facade class that integrates StateManager and UIManager
- * Implements MapLibre control interface and provides public API
+ * LayersControl — MapLibre IControl facade.
+ *
+ * Implements the MapLibre IControl interface and delegates all work to the
+ * injected services.  All five services are required.
+ *
+ * Usage:
+ *   const eventEmitter        = new EventEmitter();
+ *   const stateService        = new StateService(eventEmitter, 'myApp-layers');
+ *   const mapService          = new MapService(eventEmitter);
+ *   const uiService           = new UIService(stateService, mapService, eventEmitter);
+ *   const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
+ *
+ *   const layersControl = new LayersControl(options, {
+ *     stateService, uiService, mapService, businessLogicService, eventEmitter
+ *   });
+ *   map.addControl(layersControl, 'top-left');
  */
 class LayersControl {
-    constructor(options = {}) {
+    constructor(options = {}, services = {}) {
+        // ── Validate services ──────────────────────────────────────────────
+        if (!services.stateService)         throw new Error('LayersControl requires stateService');
+        if (!services.uiService)            throw new Error('LayersControl requires uiService');
+        if (!services.mapService)           throw new Error('LayersControl requires mapService');
+        if (!services.businessLogicService) throw new Error('LayersControl requires businessLogicService');
+        if (!services.eventEmitter)         throw new Error('LayersControl requires eventEmitter');
+
+        // ── Validate options ───────────────────────────────────────────────
+        if (!options.baseStyles || !Array.isArray(options.baseStyles)) {
+            throw new Error('LayersControl requires a baseStyles array');
+        }
+        if (!options.overlays || !Array.isArray(options.overlays)) {
+            throw new Error('LayersControl requires an overlays array');
+        }
+
+        // ── Merge defaults ─────────────────────────────────────────────────
         this.options = {
-            // Default configuration
-            // persist: { localStorageKey: 'layersControlState' },
             showOpacity: true,
-            autoClose: false,
-            icon: '☰',
+            autoClose:   false,
+            icon:        '☰',
             i18n: {
-                baseHeader: 'Base Layers',
+                baseHeader:     'Base Layers',
                 overlaysHeader: 'Overlays'
             },
-            ...options
+            ...options,
+            // Ensure i18n is fully merged
+            i18n: {
+                baseHeader:     'Base Layers',
+                overlaysHeader: 'Overlays',
+                ...(options.i18n || {})
+            }
         };
 
-        // Validate required configuration
-        if (!this.options.baseStyles || !Array.isArray(this.options.baseStyles)) {
-            throw new Error('LayersControl requires baseStyles array');
-        }
-        if (!this.options.overlays || !Array.isArray(this.options.overlays)) {
-            throw new Error('LayersControl requires overlays array');
-        }
+        // ── Store services ─────────────────────────────────────────────────
+        this.stateService         = services.stateService;
+        this.uiService            = services.uiService;
+        this.mapService           = services.mapService;
+        this.businessLogicService = services.businessLogicService;
+        this.eventEmitter         = services.eventEmitter;
 
-        // Core components
-        this.stateManager = new StateManager(this.options);
-        this.uiManager = new UIManager(this.stateManager, this.options);
-        
-        // MapLibre properties
-        this.map = null;
+        // ── MapLibre state ─────────────────────────────────────────────────
+        this.map       = null;
         this.container = null;
-        
-        // Viewport auto-save setup
-        this.viewportSaveTimeout = null;
-        this.mapEventHandlers = new Map();
-        
+
+        // ── Viewport auto-save debounce ────────────────────────────────────
+        this._viewportSaveTimeout = null;
+        this._mapEventHandlers    = new Map();
+
         this._setupPublicEventForwarding();
     }
 
-    // MapLibre Control Interface
+    // ══ MapLibre IControl interface ════════════════════════════════════════
+
     onAdd(map) {
         this.map = map;
-        
-        // Create container element
+
+        // Create the control container
         this.container = document.createElement('div');
-        this.container.className = 'maplibregl-ctrl maplibregl-ctrl-group layers-control-container';
-        
-        // Connect components
-        this.uiManager.setMap(map);
-        this.uiManager.setContainer(this.container);
-        
+        this.container.className =
+            'maplibregl-ctrl maplibregl-ctrl-group layers-control-container';
+
+        // ── Wire up services ───────────────────────────────────────────────
+        this.mapService.setMap(map);
+
+        // Pass options to UIService before render
+        this.uiService.setOptions(this.options);
+        this.uiService.setMap(map);
+        this.uiService.setContainer(this.container);
+
+        // Initialise overlay state from config (sets defaults for first load)
+        this.options.overlays.forEach(overlay => {
+            this.stateService.initOverlay(overlay.id, overlay);
+        });
+
+        // Set initial base if nothing persisted
+        if (!this.stateService.getCurrentBase()) {
+            const initialBase =
+                this.options.defaultBaseId ||
+                (this.options.baseStyles.length > 0 ? this.options.baseStyles[0].id : null);
+            if (initialBase) this.stateService.setBase(initialBase);
+        }
+
+        // Initialise business logic (give it map + service refs + options)
+        this.businessLogicService.initialize({
+            map,
+            stateService:  this.stateService,
+            uiService:     this.uiService,
+            mapService:    this.mapService,
+            eventEmitter:  this.eventEmitter,
+            options:       this.options
+        });
+
+        // Give UIService a reference to BLS (for checkbox event handling)
+        this.uiService.setBusinessLogicService(this.businessLogicService);
+
         // Initial render
-        this.uiManager.render();
-        
-        // Setup map event listeners for viewport auto-save
+        this.uiService.render();
+
+        // Viewport auto-save listener
         this._setupMapEventListeners();
-        
-        // Apply persisted state to map
+
+        // Restore persisted state
         this._restoreMapState();
-        
+
         return this.container;
     }
 
     onRemove() {
-        // Cleanup map event listeners
         this._cleanupMapEventListeners();
-        
-        // Remove container
+        this.mapService.setMap(null);
+        this.uiService.setMap(null);
+        this.uiService.setContainer(null);
         if (this.container && this.container.parentNode) {
             this.container.parentNode.removeChild(this.container);
         }
-        
-        // Clear references
-        this.map = null;
+        this.map       = null;
         this.container = null;
-        this.uiManager.setMap(null);
-        this.uiManager.setContainer(null);
     }
 
-    // Cleanup and Destruction
     destroy() {
-        // Remove all overlays first (this will clean up their state and map layers)
         this.removeAllOverlays();
-        
-        // Clean up map event listeners
         this._cleanupMapEventListeners();
-        
-        // Remove the control from the map if it's attached
+
         if (this.map && this.container) {
-            try {
-                this.map.removeControl(this);
-            } catch (error) {
-                // Control might not be added to map, ignore error
-                console.debug('Control not found on map during destroy:', error);
-            }
+            try { this.map.removeControl(this); } catch (e) { /* ignore */ }
         }
-        
-        // Clear UI manager resources
-        if (this.uiManager) {
-            // Clear all caches and states
-            this.uiManager.deckLayers.clear();
-            this.uiManager.overlayToLayerIds.clear();
-            this.uiManager.overlayCache.clear();
-            this.uiManager.loadingStates.clear();
-            this.uiManager.errorStates.clear();
-            this.uiManager.zoomFilteredOverlays.clear();
-            
-            // Disconnect from map and container
-            this.uiManager.setMap(null);
-            this.uiManager.setContainer(null);
-        }
-        
-        // Clear state manager
-        if (this.stateManager) {
-            // Remove all event listeners
-            this.stateManager.events = {};
-            
-            // Clear all internal state
-            this.stateManager.overlayStates = {};
-            this.stateManager.groupStates = {};
-            this.stateManager.layerOrder = [];
-        }
-        
-        // Remove container from DOM if it exists
+
+        this.businessLogicService.destroy();
+        this.uiService.destroy();
+        this.mapService.destroy();
+        this.stateService.destroy();
+
         if (this.container && this.container.parentNode) {
             this.container.parentNode.removeChild(this.container);
         }
-        
-        // Clear all references
-        this.map = null;
-        this.container = null;
-        this.uiManager = null;
-        this.stateManager = null;
-        this.options = null;
-        this.mapEventHandlers.clear();
-        
-        // Clear any pending timeouts
-        if (this.viewportSaveTimeout) {
-            clearTimeout(this.viewportSaveTimeout);
-            this.viewportSaveTimeout = null;
+
+        this.map                   = null;
+        this.container             = null;
+        this.stateService          = null;
+        this.uiService             = null;
+        this.mapService            = null;
+        this.businessLogicService  = null;
+        this.eventEmitter          = null;
+        this.options               = null;
+        this._mapEventHandlers.clear();
+
+        if (this._viewportSaveTimeout) {
+            clearTimeout(this._viewportSaveTimeout);
+            this._viewportSaveTimeout = null;
         }
-        
+
         return true;
     }
 
-    // State Control API
+    // ══ Base layer API ═════════════════════════════════════════════════════
+
     setBaseLayer(id) {
-        const baseExists = this.options.baseStyles.find(base => base.id === id);
-        if (!baseExists) {
-            console.warn(`Base layer '${id}' not found`);
+        const exists = this.options.baseStyles.find(b => b.id === id);
+        if (!exists) {
+            console.warn(`LayersControl.setBaseLayer: base style "${id}" not found`);
             return false;
         }
-        
-        this.stateManager.setBase(id);
-        this._applyBaseToMap(id);
+        this.businessLogicService.setBaseLayer(id);
         return true;
     }
 
-    // Alias for API consistency
-    setBase(baseId) {
-        return this.setBaseLayer(baseId);
-    }
+    /** Alias */
+    setBase(id) { return this.setBaseLayer(id); }
 
-    // Base Style Management
     addBaseStyle(style) {
-        if (!style || !style.id) {
-            throw new Error('Base style must have an id property');
-        }
-        
-        // Check if base style already exists
-        const existingIndex = this.options.baseStyles.findIndex(base => base.id === style.id);
-        if (existingIndex > -1) {
-            // Update existing base style
-            this.options.baseStyles[existingIndex] = { ...this.options.baseStyles[existingIndex], ...style };
+        if (!style || !style.id) throw new Error('Base style must have an id');
+        const idx = this.options.baseStyles.findIndex(b => b.id === style.id);
+        if (idx > -1) {
+            this.options.baseStyles[idx] = { ...this.options.baseStyles[idx], ...style };
         } else {
-            // Add new base style
             this.options.baseStyles.push(style);
         }
-        
-        // Re-render UI to show the new base style
-        this.uiManager.render();
-        
+        this.businessLogicService.updateBaseStyles(this.options.baseStyles);
         return true;
     }
 
     removeBaseStyle(id) {
-        if (!id) {
-            console.warn('Base style ID is required');
+        if (!id) return false;
+        const idx = this.options.baseStyles.findIndex(b => b.id === id);
+        if (idx === -1) {
+            console.warn(`LayersControl.removeBaseStyle: "${id}" not found`);
             return false;
         }
-        
-        // Find the base style to remove
-        const baseIndex = this.options.baseStyles.findIndex(base => base.id === id);
-        if (baseIndex === -1) {
-            console.warn(`Base style '${id}' not found`);
-            return false;
-        }
-        
-        // Check if this is the currently active base style
-        const currentBase = this.stateManager.get('base');
-        const wasActive = currentBase === id;
-        
-        // Remove from configuration
-        this.options.baseStyles.splice(baseIndex, 1);
-        
-        // If the removed style was active, switch to a different one
+        const wasActive = this.stateService.getCurrentBase() === id;
+        this.options.baseStyles.splice(idx, 1);
+
         if (wasActive && this.options.baseStyles.length > 0) {
-            // Try to switch to default base, otherwise use the first available
-            const newBaseId = this.options.defaultBaseId && 
-                              this.options.baseStyles.find(base => base.id === this.options.defaultBaseId)
-                ? this.options.defaultBaseId 
-                : this.options.baseStyles[0].id;
-            
-            this.setBaseLayer(newBaseId);
+            const fallback =
+                this.options.baseStyles.find(b => b.id === this.options.defaultBaseId) ||
+                this.options.baseStyles[0];
+            this.businessLogicService.setBaseLayer(fallback.id);
         }
-        
-        // Re-render UI to reflect changes
-        this.uiManager.render();
-        
+
+        this.businessLogicService.updateBaseStyles(this.options.baseStyles);
         return true;
     }
 
-    // Overlay Management
-    addOverlay(overlayConfig, fireOverlayCallback = false) {
-        if (!overlayConfig.id) {
+    getBaseLayers() {
+        const currentBase = this.stateService.getCurrentBase();
+        return this.options.baseStyles.map(b => ({ ...b, active: b.id === currentBase }));
+    }
+
+    // ══ Overlay API ════════════════════════════════════════════════════════
+
+    addOverlay(overlayConfig, fireCallback = false) {
+        if (!overlayConfig || !overlayConfig.id) {
             throw new Error('Overlay config must have an id');
         }
-        
-        // Check if overlay already exists
-        const existingIndex = this.options.overlays.findIndex(o => o.id === overlayConfig.id);
-        if (existingIndex > -1) {
-            // Update existing overlay
-            this.options.overlays[existingIndex] = { ...this.options.overlays[existingIndex], ...overlayConfig };
+        const idx = this.options.overlays.findIndex(o => o.id === overlayConfig.id);
+        if (idx > -1) {
+            this.options.overlays[idx] = { ...this.options.overlays[idx], ...overlayConfig };
         } else {
-            // Add new overlay
             this.options.overlays.push(overlayConfig);
         }
-        
-        // Initialize state for new overlay in StateManager's internal state
-        if (!this.stateManager.overlayStates[overlayConfig.id]) {
-            this.stateManager.overlayStates[overlayConfig.id] = {
-                visible: overlayConfig.defaultVisible || false,
-                opacity: overlayConfig.defaultOpacity || 1.0
-            };
-        }
-        
-        // Handle groups
-        if (overlayConfig.group) {
-            if (!this.stateManager.groupStates[overlayConfig.group]) {
-                this.stateManager.groupStates[overlayConfig.group] = {
-                    visible: overlayConfig.defaultVisible || false,
-                    opacity: 1.0
-                };
-            }
-        }
-        
-        // If defaultVisible is true, activate the overlay on the map
-        if (overlayConfig.defaultVisible) {
-            this.uiManager._activateOverlay(overlayConfig.id);
-            
-            // Call onChecked callback if provided and fireOverlayCallback is true
-            if (fireOverlayCallback && typeof overlayConfig.onChecked === 'function') {
-                this.uiManager._callOverlayCallback(overlayConfig.onChecked, overlayConfig.id, overlayConfig, false);
-            }
-        }
-        
-        // Re-render UI
-        this.uiManager.updateOverlays();
-        
+        this.businessLogicService.addOverlay(overlayConfig, fireCallback);
+        this.uiService.updateOverlays();
         return true;
     }
 
-    removeOverlay(id, fireOverlayCallback = false) {
-        // Find and remove from config
-        const overlayIndex = this.options.overlays.findIndex(o => o.id === id);
-        if (overlayIndex === -1) {
-            console.warn(`Overlay '${id}' not found`);
+    removeOverlay(id, fireCallback = false) {
+        const idx = this.options.overlays.findIndex(o => o.id === id);
+        if (idx === -1) {
+            console.warn(`LayersControl.removeOverlay: "${id}" not found`);
             return false;
         }
-        
-        const overlay = this.options.overlays[overlayIndex];
-        
-        // Deactivate if currently active
-        const overlayState = this.stateManager.get('overlays')[id];
-        if (overlayState?.visible) {
-            // Call onUnchecked callback if provided and fireOverlayCallback is true
-            if (fireOverlayCallback && typeof overlay.onUnchecked === 'function') {
-                this.uiManager._callOverlayCallback(overlay.onUnchecked, id, overlay, false);
-            }
-            
-            // Deactivate overlay without triggering additional callbacks
-            this.stateManager.setOverlayVisibility(id, false);
-            this.uiManager._deactivateOverlay(id);
-            this.uiManager._updateOverlayUI(id);
-        }
-        
-        // Remove from configuration
-        this.options.overlays.splice(overlayIndex, 1);
-        
-        // Remove from state
-        const allOverlays = this.stateManager.get('overlays');
-        delete allOverlays[id];
-        
-        // Remove from layer order
-        const layerOrder = this.stateManager.get('layerOrder');
-        const orderIndex = layerOrder.indexOf(id);
-        if (orderIndex > -1) {
-            layerOrder.splice(orderIndex, 1);
-        }
-        
-        // Re-render UI
-        this.uiManager.updateOverlays();
-        
+        this.businessLogicService.removeOverlay(id, fireCallback);
+        this.options.overlays.splice(idx, 1);
+        this.uiService.updateOverlays();
         return true;
     }
 
     removeAllOverlays() {
-        // Get all overlay IDs
-        const overlayIds = this.options.overlays.map(o => o.id);
-        
-        // Deactivate all visible overlays
-        overlayIds.forEach(id => {
-            const overlayState = this.stateManager.get('overlays')[id];
-            if (overlayState?.visible) {
-                this.hideOverlay(id);
-            }
-        });
-        
-        // Clear configuration
+        this.businessLogicService.removeAllOverlays();
         this.options.overlays = [];
-        
-        // Clear state
-        this.stateManager.overlayStates = {};
-        this.stateManager.groupStates = {};
-        this.stateManager.layerOrder = [];
-        
-        // Clear UI manager caches
-        this.uiManager.deckLayers.clear();
-        this.uiManager.overlayToLayerIds.clear();
-        this.uiManager.overlayCache.clear();
-        this.uiManager.loadingStates.clear();
-        this.uiManager.errorStates.clear();
-        this.uiManager.zoomFilteredOverlays.clear();
-        
-        // Re-render UI
-        this.uiManager.updateOverlays();
-        
-        // Emit change event
-        this.stateManager.emit('change', this.stateManager.getAll());
-        
+        this.uiService.updateOverlays();
         return true;
     }
 
-    updateOverlay(id, updates) {
-        const overlayIndex = this.options.overlays.findIndex(o => o.id === id);
-        if (overlayIndex === -1) {
-            console.warn(`Overlay '${id}' not found`);
-            return false;
-        }
-        
-        // Update configuration
-        this.options.overlays[overlayIndex] = { ...this.options.overlays[overlayIndex], ...updates };
-        
-        // Clear overlay cache if configuration changed
-        this.uiManager.overlayCache.delete(id);
-        
-        // Re-render UI
-        this.uiManager.updateOverlays();
-        
-        return true;
-    }
-
-    getOverlay(id) {
-        const overlay = this.options.overlays.find(o => o.id === id);
-        if (!overlay) return null;
-        
-        const state = this.stateManager.get('overlays')[id];
-        return {
-            ...overlay,
-            visible: state?.visible || false,
-            opacity: state?.opacity || 1.0
-        };
-    }
-
-    // Visibility Controls
-    showOverlay(id, fireOverlayCallback = false) {
+    showOverlay(id, fireCallback = false) {
         const overlay = this.options.overlays.find(o => o.id === id);
         if (!overlay) {
-            console.warn(`Overlay '${id}' not found`);
+            console.warn(`LayersControl.showOverlay: "${id}" not found`);
             return false;
         }
-        
-        this.stateManager.setOverlayVisibility(id, true);
-        this.uiManager._activateOverlay(id);
-        this.uiManager._updateOverlayUI(id);
-        
-        // Call onChecked callback if provided and fireOverlayCallback is true
-        if (fireOverlayCallback && typeof overlay.onChecked === 'function') {
-            this.uiManager._callOverlayCallback(overlay.onChecked, id, overlay, false);
-        }
-        
+        this.businessLogicService.showOverlay(id, fireCallback);
         return true;
     }
 
-    hideOverlay(id, fireOverlayCallback = false) {
+    hideOverlay(id, fireCallback = false) {
         const overlay = this.options.overlays.find(o => o.id === id);
         if (!overlay) {
-            console.warn(`Overlay '${id}' not found`);
+            console.warn(`LayersControl.hideOverlay: "${id}" not found`);
             return false;
         }
-        
-        this.stateManager.setOverlayVisibility(id, false);
-        this.uiManager._deactivateOverlay(id);
-        this.uiManager._updateOverlayUI(id);
-        
-        // Call onUnchecked callback if provided and fireOverlayCallback is true
-        if (fireOverlayCallback && typeof overlay.onUnchecked === 'function') {
-            this.uiManager._callOverlayCallback(overlay.onUnchecked, id, overlay, false);
-        }
-        
+        this.businessLogicService.hideOverlay(id, fireCallback);
         return true;
     }
 
-    toggleOverlayVisibility(id) {
-        const overlayState = this.stateManager.get('overlays')[id];
-        if (!overlayState) {
-            console.warn(`Overlay '${id}' not found`);
+    setOverlayOpacity(id, value) {
+        const overlay = this.options.overlays.find(o => o.id === id);
+        if (!overlay) {
+            console.warn(`LayersControl.setOverlayOpacity: "${id}" not found`);
             return false;
         }
-        
-        if (overlayState.visible) {
-            return this.hideOverlay(id);
-        } else {
-            return this.showOverlay(id);
-        }
+        this.businessLogicService.setOverlayOpacity(id, value);
+        return true;
     }
 
-    // Group Controls
+    getOverlays() {
+        const overlayStates = this.stateService.getOverlayStates();
+        return this.options.overlays.map(o => ({
+            ...o,
+            visible: overlayStates[o.id] ? overlayStates[o.id].visible : false,
+            opacity: overlayStates[o.id] ? overlayStates[o.id].opacity : 1.0
+        }));
+    }
+
+    // ══ Group API ══════════════════════════════════════════════════════════
+
     showGroup(id) {
-        const hasGroupOverlays = this.options.overlays.some(o => o.group === id);
-        if (!hasGroupOverlays) {
-            console.warn(`Group '${id}' not found or has no overlays`);
+        if (!this.options.overlays.some(o => o.group === id)) {
+            console.warn(`LayersControl.showGroup: group "${id}" not found`);
             return false;
         }
-        
-        this.stateManager.setGroupVisibility(id, true);
-        this.uiManager.handleToggleGroup(id);
+        this.businessLogicService.setGroupVisibility(id, true);
         return true;
     }
 
     hideGroup(id) {
-        const hasGroupOverlays = this.options.overlays.some(o => o.group === id);
-        if (!hasGroupOverlays) {
-            console.warn(`Group '${id}' not found or has no overlays`);
+        if (!this.options.overlays.some(o => o.group === id)) {
+            console.warn(`LayersControl.hideGroup: group "${id}" not found`);
             return false;
         }
-        
-        this.stateManager.setGroupVisibility(id, false);
-        
-        // Deactivate all overlays in group
-        this.options.overlays
-            .filter(overlay => overlay.group === id)
-            .forEach(overlay => {
-                this.stateManager.setOverlayVisibility(overlay.id, false);
-                this.uiManager._deactivateOverlay(overlay.id);
-                this.uiManager._updateOverlayUI(overlay.id);
-            });
-        
-        this.uiManager._updateGroupUI(id);
-        return true;
-    }
-
-    toggleGroupVisibility(id) {
-        const groupState = this.stateManager.get('groups')[id];
-        if (!groupState) {
-            console.warn(`Group '${id}' not found`);
-            return false;
-        }
-        
-        if (groupState.visible) {
-            return this.hideGroup(id);
-        } else {
-            return this.showGroup(id);
-        }
-    }
-
-    // Opacity Controls
-    setOverlayOpacity(id, value) {
-        const overlay = this.options.overlays.find(o => o.id === id);
-        if (!overlay) {
-            console.warn(`Overlay '${id}' not found`);
-            return false;
-        }
-        
-        const clampedValue = Math.max(0, Math.min(1, parseFloat(value)));
-        this.stateManager.setOverlayOpacity(id, clampedValue);
-        this.uiManager.handleOpacitySlider(id, clampedValue, false);
+        this.businessLogicService.setGroupVisibility(id, false);
         return true;
     }
 
     setGroupOpacity(id, value) {
-        const hasGroupOverlays = this.options.overlays.some(o => o.group === id);
-        if (!hasGroupOverlays) {
-            console.warn(`Group '${id}' not found or has no overlays`);
+        if (!this.options.overlays.some(o => o.group === id)) {
+            console.warn(`LayersControl.setGroupOpacity: group "${id}" not found`);
             return false;
         }
-        
-        const clampedValue = Math.max(0, Math.min(1, parseFloat(value)));
-        this.stateManager.setGroupOpacity(id, clampedValue);
-        this.uiManager.handleOpacitySlider(id, clampedValue, true);
+        this.businessLogicService.setGroupOpacity(id, value);
         return true;
-    }
-
-    // Layer Ordering
-    bringOverlayToFront(id) {
-        const layerOrder = [...this.stateManager.get('layerOrder')];
-        const index = layerOrder.indexOf(id);
-        
-        if (index > -1) {
-            layerOrder.splice(index, 1); // Remove from current position
-        }
-        layerOrder.push(id); // Add to end (front)
-        
-        this.stateManager.reorderLayers(layerOrder);
-        return true;
-    }
-
-    sendOverlayToBack(id) {
-        const layerOrder = [...this.stateManager.get('layerOrder')];
-        const index = layerOrder.indexOf(id);
-        
-        if (index > -1) {
-            layerOrder.splice(index, 1); // Remove from current position
-        }
-        layerOrder.unshift(id); // Add to beginning (back)
-        
-        this.stateManager.reorderLayers(layerOrder);
-        return true;
-    }
-
-    reorderOverlays(orderedIds) {
-        if (!Array.isArray(orderedIds)) {
-            console.warn('reorderOverlays requires an array of overlay IDs');
-            return false;
-        }
-        
-        // Validate all IDs exist
-        const validIds = orderedIds.filter(id => 
-            this.options.overlays.some(o => o.id === id)
-        );
-        
-        if (validIds.length !== orderedIds.length) {
-            console.warn('Some overlay IDs in reorderOverlays were not found');
-        }
-        
-        this.stateManager.reorderLayers(validIds);
-        return true;
-    }
-
-    // Viewport Controls
-    saveCurrentViewport() {
-        if (!this.map) {
-            console.warn('Map not available for viewport save');
-            return false;
-        }
-        
-        const viewport = {
-            center: this.map.getCenter(),
-            zoom: this.map.getZoom(),
-            bearing: this.map.getBearing(),
-            pitch: this.map.getPitch()
-        };
-        
-        this.stateManager.setViewport(viewport);
-        return true;
-    }
-
-    applySavedViewport() {
-        const savedViewport = this.stateManager.get('viewport');
-        if (!this.map || !savedViewport.center) {
-            console.warn('No saved viewport or map not available');
-            return false;
-        }
-        
-        this.map.jumpTo({
-            center: savedViewport.center,
-            zoom: savedViewport.zoom,
-            bearing: savedViewport.bearing || 0,
-            pitch: savedViewport.pitch || 0
-        });
-        
-        return true;
-    }
-
-    // Persistence
-    clearPersistedData() {
-        return this.stateManager.clearPersisted();
-    }
-
-    // Events
-    on(event, callback) {
-        this.stateManager.on(event, callback);
-        return this;
-    }
-
-    off(event, callback) {
-        this.stateManager.off(event, callback);
-        return this;
-    }
-
-    // State Access
-    getCurrentState() {
-        return this.stateManager.getAll();
-    }
-
-    getBaseLayers() {
-        const currentBase = this.stateManager.get('base');
-        return this.options.baseStyles.map(base => ({
-            ...base,
-            active: base.id === currentBase
-        }));
-    }
-
-    getOverlays() {
-        const overlayStates = this.stateManager.get('overlays');
-        return this.options.overlays.map(overlay => ({
-            ...overlay,
-            visible: overlayStates[overlay.id]?.visible || false,
-            opacity: overlayStates[overlay.id]?.opacity || 1.0
-        }));
     }
 
     getGroups() {
-        const groupStates = this.stateManager.get('groups');
+        const groupStates = this.stateService.getGroupStates();
         const groups = new Map();
-        
+
         this.options.overlays.forEach(overlay => {
             if (overlay.group && !groups.has(overlay.group)) {
-                const groupConfig = this.options.groups?.find(g => g.id === overlay.group);
+                const cfg = (this.options.groups || []).find(g => g.id === overlay.group);
                 groups.set(overlay.group, {
-                    id: overlay.group,
-                    label: groupConfig?.label || overlay.group,
-                    visible: groupStates[overlay.group]?.visible || false,
-                    opacity: groupStates[overlay.group]?.opacity || 1.0,
+                    id:      overlay.group,
+                    label:   cfg ? cfg.label : overlay.group,
+                    visible: groupStates[overlay.group] ? groupStates[overlay.group].visible : false,
+                    opacity: groupStates[overlay.group] ? groupStates[overlay.group].opacity : 1.0,
                     overlays: []
                 });
             }
         });
-        
-        // Add overlays to their groups
+
         this.options.overlays.forEach(overlay => {
             if (overlay.group && groups.has(overlay.group)) {
                 groups.get(overlay.group).overlays.push(overlay.id);
             }
         });
-        
+
         return Array.from(groups.values());
     }
 
-    // Private methods
+    // ══ Viewport API ═══════════════════════════════════════════════════════
+
+    saveCurrentViewport() {
+        if (!this.map) return false;
+        const center = this.map.getCenter();
+        this.stateService.setViewport({
+            center:  { lng: center.lng, lat: center.lat },
+            zoom:    this.map.getZoom(),
+            bearing: this.map.getBearing(),
+            pitch:   this.map.getPitch()
+        });
+        return true;
+    }
+
+    applySavedViewport() {
+        if (!this.map) return false;
+        const vp = this.stateService.getViewport();
+        if (!vp || !vp.center) return false;
+        this.map.jumpTo({
+            center:  vp.center,
+            zoom:    vp.zoom    || 0,
+            bearing: vp.bearing || 0,
+            pitch:   vp.pitch   || 0
+        });
+        return true;
+    }
+
+    // ══ Persistence API ════════════════════════════════════════════════════
+
+    clearPersistedData() {
+        return this.stateService.clearPersisted();
+    }
+
+    // ══ Events API ════════════════════════════════════════════════════════
+
+    on(event, callback) {
+        this.eventEmitter.on(event, callback);
+        return this;
+    }
+
+    off(event, callback) {
+        this.eventEmitter.off(event, callback);
+        return this;
+    }
+
+    // ══ State inspection ═══════════════════════════════════════════════════
+
+    getCurrentState() {
+        return this.stateService.getAll();
+    }
+
+    // ══ Private helpers ════════════════════════════════════════════════════
+
     _setupPublicEventForwarding() {
-        // Forward all StateManager events as public events
-        ['change', 'basechange', 'overlaychange', 'overlaygroupchange', 'viewportchange', 'memorycleared']
-            .forEach(eventType => {
-                this.stateManager.on(eventType, (data) => {
-                    // Events are already emitted by StateManager, no need to re-emit
-                });
-            });
+        // The eventEmitter is already shared by all services, so events emitted
+        // by services are automatically available to external subscribers via
+        // layersControl.on(event, cb). No additional forwarding needed.
     }
 
     _setupMapEventListeners() {
         if (!this.map) return;
-        
-        // Viewport auto-save on moveend
+
         const handleMoveEnd = () => {
-            // Debounce viewport saves
-            clearTimeout(this.viewportSaveTimeout);
-            this.viewportSaveTimeout = setTimeout(() => {
+            clearTimeout(this._viewportSaveTimeout);
+            this._viewportSaveTimeout = setTimeout(() => {
                 this.saveCurrentViewport();
             }, 500);
         };
-        
-        // Store handlers for cleanup
-        this.mapEventHandlers.set('moveend', handleMoveEnd);
-        
-        // Add listeners
+
+        this._mapEventHandlers.set('moveend', handleMoveEnd);
         this.map.on('moveend', handleMoveEnd);
     }
 
     _cleanupMapEventListeners() {
-        if (!this.map || this.mapEventHandlers.size === 0) return;
-        
-        // Remove all stored event listeners
-        this.mapEventHandlers.forEach((handler, eventType) => {
-            this.map.off(eventType, handler);
+        if (!this.map) return;
+        this._mapEventHandlers.forEach((handler, event) => {
+            this.map.off(event, handler);
         });
-        
-        this.mapEventHandlers.clear();
-        
-        // Clear debounce timeout
-        if (this.viewportSaveTimeout) {
-            clearTimeout(this.viewportSaveTimeout);
-            this.viewportSaveTimeout = null;
+        this._mapEventHandlers.clear();
+        if (this._viewportSaveTimeout) {
+            clearTimeout(this._viewportSaveTimeout);
+            this._viewportSaveTimeout = null;
         }
     }
 
     _restoreMapState() {
         if (!this.map) return;
-        
-        // Apply saved base layer
-        const currentBase = this.stateManager.get('base');
-        if (currentBase) {
-            this._applyBaseToMap(currentBase);
-        }
-        
-        // Apply saved viewport
-        const savedViewport = this.stateManager.get('viewport');
-        if (savedViewport.center) {
-            // Use setTimeout to ensure map is fully initialized
-            setTimeout(() => {
-                this.applySavedViewport();
-            }, 100);
-        }
-        
-        // Activate visible overlays
-        const overlayStates = this.stateManager.get('overlays');
-        Object.entries(overlayStates).forEach(([overlayId, state]) => {
-            if (state.visible) {
-                // Use setTimeout to ensure proper initialization order
-                setTimeout(() => {
-                    this.uiManager._activateOverlay(overlayId);
-                }, 200);
-            }
-        });
-    }
 
-    _applyBaseToMap(baseId) {
-        if (!this.map) return;
-        
-        const baseStyle = this.options.baseStyles.find(base => base.id === baseId);
-        if (!baseStyle) return;
-        
-        // Apply base style to map
-        if (baseStyle.style) {
-            this.map.setStyle(baseStyle.style);
+        // Apply saved (or default) base layer.
+        // applyBaseStyle() calls map.setStyle() and in its 'styledata' callback
+        // automatically re-activates all visible overlays, so we must NOT also
+        // activate them manually when a base style change is triggered.
+        const savedBase = this.stateService.getCurrentBase();
+        let baseStyleTriggered = false;
+
+        if (savedBase) {
+            const exists = this.options.baseStyles.find(b => b.id === savedBase);
+            if (exists) {
+                this.businessLogicService.setBaseLayer(savedBase);
+                baseStyleTriggered = true;
+            } else {
+                // Persisted base no longer exists in current config; reset to default
+                const fallback =
+                    this.options.baseStyles.find(b => b.id === this.options.defaultBaseId) ||
+                    this.options.baseStyles[0];
+                if (fallback) {
+                    this.stateService.setBase(fallback.id);
+                    this.uiService.updateBaseUI();
+                }
+            }
+        }
+
+        // Restore viewport (slightly longer delay when waiting for style load)
+        const vp = this.stateService.getViewport();
+        if (vp && vp.center) {
+            setTimeout(() => this.applySavedViewport(), baseStyleTriggered ? 400 : 100);
+        }
+
+        // Only manually activate overlays when no base style reload was triggered.
+        // Otherwise the styledata callback in applyBaseStyle handles restoration.
+        if (!baseStyleTriggered) {
+            const overlayStates = this.stateService.getOverlayStates();
+            Object.entries(overlayStates).forEach(([overlayId, state]) => {
+                if (state && state.visible) {
+                    setTimeout(() => {
+                        this.businessLogicService.activateOverlay(overlayId, false);
+                    }, 200);
+                }
+            });
         }
     }
 }

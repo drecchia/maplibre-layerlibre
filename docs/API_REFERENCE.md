@@ -1,148 +1,275 @@
 # API Reference — LayersControl
 
-This document describes the public API, configuration options, and events for LayersControl. All information is based on the actual implementation in `src/js/main.js`. Deprecated, internal, or unsupported features are omitted.
+Public API for the `@drecchia/maplibre-layer-control` library. All classes are global variables available from `dist/js/all.min.js`.
 
 ---
 
-## Classes
+## Classes Overview
 
-### EventEmitter (public)
-- `on(event, handler): this`  
-  Subscribe to an event.
-- `off(event, handler): this`  
-  Unsubscribe from an event.
-- `emit(event, data): void`  
-  Emit an event with optional data.
-
----
-
-### StateStore (internal, relevant for persistence/events)
-- `constructor(options)`
-- `getState(): Object`
-- `setState(newState: Object): void`
-- `setBase(baseId: string): void`
-- `setOverlay(overlayId: string, state: { visible?: boolean, opacity?: number }): void`
-- `setGroup(groupId: string, state: { visible?: boolean, opacity?: number }): void`
-- `setViewport(viewport: { center?: [number,number], zoom?: number, bearing?: number, pitch?: number }): void`
-- `getLayerOrder(): string[]`
-- `clearMemory(): boolean`
+| Class | Role |
+|-------|------|
+| `EventEmitter` | Shared pub/sub event bus |
+| `StateService` | State + localStorage persistence |
+| `MapService` | Thin MapLibre map wrapper |
+| `UIManager` / `UIService` | DOM rendering, deck.gl overlay lifecycle |
+| `BusinessLogicService` | Orchestrator — state changes → UI updates |
+| `LayersControl` | Public facade implementing MapLibre `IControl` |
+| `BoundsHelper` | Static utility for bounding box calculations |
 
 ---
 
-### OverlayManager (internal, manages overlays and events)
-- `constructor(options, stateStore)`
-- `setMap(map: maplibregl.Map): void`
-- `removeMap(): void`
-- `show(overlayId: string, isUserInteraction?: boolean): Promise<boolean>`
-- `hide(overlayId: string): void`
-- `applyOpacity(overlayId: string, opacity: number): void`
-- `setBase(baseId: string): void`
-- `reposition(): void`
-- `getOverlayBeforeId(): string | undefined`
-- `updateAllZoomFiltering(): void`
-- `removeAllOverlays(): void`
+## EventEmitter
+
+```js
+const ee = new EventEmitter();
+```
+
+- `on(event, handler): this` — subscribe to an event
+- `off(event, handler): this` — unsubscribe
+- `emit(event, data): void` — emit (internal use; called by services)
 
 ---
 
-### LayersControl (public facade)
-- `constructor(options?: Object)`
-- `addTo(map: maplibregl.Map): this`
-- `onAdd(map: maplibregl.Map): HTMLElement`
-- `onRemove(): void`
-- `remove(): void`
-- `destroy(): void`
-- `setBase(baseId: string): void`
-- `toggleOverlay(overlayId: string, visible: boolean|null = null, isUserInteraction: boolean = false): Promise<void>`
-- `hideOverlay(overlayId: string): Promise<void>`
-- `showOverlay(overlayId: string, isUserInteraction: boolean = false): Promise<void>`
-- `setOverlayOpacity(overlayId: string, opacity: number): void`
-- `repositionOverlays(): void`
-- `getOverlayBeforeId(): string | undefined`
-- `toggleOverlayGroup(groupId: string, visible: boolean|null = null, isUserInteraction: boolean = false): Promise<void>`
-- `setGroupOpacity(groupId: string, opacity: number): void`
-- `addOverlay(overlay: Object): void`
-- `removeOverlay(overlayId: string): void`
-- `removeAllOverlays(): void`
-- `getState(): Object`
-- `setState(newState: Object): void`
-- **Static methods:**
-  - `getInitialStyle(options?: Object): String|Object|null`
-  - `getInitialViewport(options?: Object): { center, zoom, bearing, pitch } | null`
+## StateService
+
+```js
+const stateService = new StateService(eventEmitter, 'my-app-layers');
+```
+
+Second argument is the `localStorage` key (namespaces persistence per control instance).
+
+**Named getters (preferred):**
+- `getCurrentBase(): string|null`
+- `getOverlayStates(): Object` — `{ [id]: { visible, opacity } }`
+- `getGroupStates(): Object` — `{ [id]: { visible, opacity } }`
+- `getViewport(): Object|null` — `{ center, zoom, bearing, pitch }`
+- `getAll(): Object` — full state snapshot
+
+**Setters (internal, called by BusinessLogicService):**
+- `setBase(baseId)`
+- `setOverlayVisibility(id, visible)`
+- `setOverlayOpacity(id, opacity)`
+- `setGroupVisibility(id, visible)`
+- `setGroupOpacity(id, opacity)`
+- `setViewport(viewport)`
+- `initOverlay(id, config)` — initialises overlay state from defaults
+- `removeOverlay(id)`
+- `clearPersisted(): boolean` — clears localStorage entry
 
 ---
 
-## LayersControl Options
+## MapService
 
-See [CONFIGURATION.md](./CONFIGURATION.md) for a full schema and examples.
+```js
+const mapService = new MapService(eventEmitter);
+```
 
----
+Thin wrapper. Used internally; consumers do not call it directly.
 
-### BoundsHelper (public utility)
-- `calculateBounds(coords: Array<[number,number]> | Array<object>, padding?: number|object): [ [minLng, minLat], [maxLng, maxLat] ]`
-  - Utility to calculate a bounding box from an array of coordinate pairs or objects.
-  - `coords` may be an array of [lng, lat] pairs or objects with numeric longitude/latitude properties (commonly [lng,lat] arrays).
-  - `padding` may be a number (fractional padding applied relative to span) or an object with explicit pixel/coordinate padding; when omitted a small default padding is applied to avoid zero-area bounds.
-  - Returns an explicit bounds array suitable for the `fitBounds` overlay attribute or for use with map fit methods.
-
+- `setMap(map)` / `setMap(null)` — called by LayersControl on add/remove
+- `getMap(): maplibregl.Map|null`
+- `destroy()`
 
 ---
 
-## Overlay Configuration Attributes
+## UIManager / UIService
 
-Documented attributes are supported in code:
+`UIService` is an alias: `const UIService = UIManager` (at bottom of `uiManager.js`).
 
-- **id**: string (required) — Unique overlay identifier
-- **label**: string (required) — Display name in UI
-- **group**: string (optional) — Overlay group
-- **defaultVisible**: boolean (optional)
-- **defaultOpacity**: number (optional, default 1.0)
-- **opacityControls**: boolean (optional)
-- **renderOnClick**: async function (optional) — See [RENDER_ON_CLICK.md](./RENDER_ON_CLICK.md)
-- **deckLayers**: array (optional) — deck.gl layer definitions
-- **panOnAdd**: boolean (optional)
-- **panZoom**: number (optional)
-- **anchor**: { beforeId?: string } (optional)
-- **minZoomLevel**: number (optional)
-- **maxZoomLevel**: number (optional)
-- **forcedBaseLayerId**: string (optional)
-- **forcedBearing**: number (optional)
-- **forcedPitch**: number (optional)
- - **fitBounds**: array (optional) — explicit bounds [[minLng, minLat], [maxLng, maxLat]] to fit the map to when the overlay is activated (takes precedence over `panOnAdd`). Can be produced by `BoundsHelper.calculateBounds()`.
-- **tooltip**: string | object (optional)
-- **getTooltip**: function (optional)
+```js
+const uiService = new UIService(stateService, mapService, eventEmitter);
+```
 
-Deprecated MapLibre `source`/`layers`/`layerIds` are not supported.
+Options and BLS references are injected after construction by `LayersControl.onAdd()`.
+Consumers do not call UIManager methods directly; use `LayersControl` API instead.
 
 ---
 
-## Events
+## BusinessLogicService
 
-Events are emitted by LayersControl and subcomponents. Payloads match the implementation in `src/js/main.js`.
+```js
+const businessLogicService = new BusinessLogicService(stateService, eventEmitter);
+```
 
-- **basechange**: `{ baseId, previousBaseId }`
-- **overlaychange**: `{ id, visible, opacity, previousVisible, previousOpacity }`
-- **overlaygroupchange**: `{ groupId, visible, opacity, overlays }`
-- **change**: Full state object
-- **loading**: `{ id }`
-- **success**: `{ id }`
-- **error**: `{ id, error }`
-- **styleload**: `null`
-- **sourceloaded**: `sourceId`
-- **viewportchange**: `{ viewport, previousViewport }`
-- **zoomfilter**: `{ id, filtered }`
-- **memorycleared**: `{ localStorageKey }`
+`initialize(deps)` is called by `LayersControl.onAdd()`. Consumers do not call it directly.
 
 ---
 
-## Examples
+## LayersControl
 
-See [QUICKSTART.md](./QUICKSTART.md) and [CONFIGURATION.md](./CONFIGURATION.md) for usage and configuration examples.
+The main public API. Implements the MapLibre `IControl` interface.
+
+```js
+const layersControl = new LayersControl(options, {
+    stateService, uiService, mapService, businessLogicService, eventEmitter
+});
+map.addControl(layersControl, 'top-left');
+```
+
+### MapLibre IControl
+
+- `onAdd(map): HTMLElement` — called by MapLibre; returns control container
+- `onRemove(): void` — called by MapLibre; cleans up listeners
+
+### Base Layer API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `setBaseLayer(id)` | `boolean` | Switch active base style |
+| `setBase(id)` | `boolean` | Alias for `setBaseLayer` |
+| `addBaseStyle(style)` | `boolean` | Add or update a base style |
+| `removeBaseStyle(id)` | `boolean` | Remove a base style |
+| `getBaseLayers()` | `Array` | All base styles with `active` flag |
+
+### Overlay API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `addOverlay(config, fireCallback?)` | `boolean` | Add or update an overlay at runtime |
+| `removeOverlay(id, fireCallback?)` | `boolean` | Remove an overlay |
+| `removeAllOverlays()` | `boolean` | Remove all overlays |
+| `showOverlay(id, fireCallback?)` | `boolean` | Make an overlay visible |
+| `hideOverlay(id, fireCallback?)` | `boolean` | Hide an overlay |
+| `setOverlayOpacity(id, value)` | `boolean` | Set opacity (0–1) |
+| `getOverlays()` | `Array` | All overlays with current `visible` and `opacity` |
+
+### Group API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `showGroup(id)` | `boolean` | Show all overlays in group |
+| `hideGroup(id)` | `boolean` | Hide all overlays in group |
+| `setGroupOpacity(id, value)` | `boolean` | Set opacity for all overlays in group |
+| `getGroups()` | `Array` | All groups with current `visible`, `opacity`, and member `overlays` |
+
+### Viewport & Persistence API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `saveCurrentViewport()` | `boolean` | Persist current map center/zoom/bearing/pitch |
+| `applySavedViewport()` | `boolean` | Jump map to persisted viewport |
+| `clearPersistedData()` | `boolean` | Delete localStorage entry |
+
+### Events API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `on(event, callback)` | `this` | Subscribe to an event (chainable) |
+| `off(event, callback)` | `this` | Unsubscribe |
+
+### Introspection
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `getCurrentState()` | `Object` | Full state snapshot from `StateService.getAll()` |
+| `destroy()` | `boolean` | Fully tear down the control |
 
 ---
 
-## Notes
+## BoundsHelper
 
-- Only public APIs and supported options are documented.
-- Deprecated or internal features are omitted.
-- OverlayManager and StateStore are internal but relevant for advanced usage and event handling.
-- For dynamic overlays, see [RENDER_ON_CLICK.md](./RENDER_ON_CLICK.md).
+Static utility class. Available as a global from the bundle.
+
+### `BoundsHelper.calculateBounds(points, padding?)`
+
+Calculate a bounding box from coordinate pairs.
+
+```js
+const bounds = BoundsHelper.calculateBounds(
+    data.map(d => d.position),  // Array of [lng, lat]
+    0.1                          // optional uniform padding (degrees)
+);
+// Returns [[minLng, minLat], [maxLng, maxLat]]
+```
+
+- `points`: `Array<[lng, lat]>` — coordinate pairs
+- `padding`: `number` (uniform) or `{ top, bottom, left, right }` (per-side, in degrees)
+- Returns: `[[minLng, minLat], [maxLng, maxLat]]`
+
+### `BoundsHelper.calculateBoundsCenter(bounds)`
+
+Returns the center `[lng, lat]` of a bounding box.
+
+### `BoundsHelper.calculateBoundsZoom(bounds, container, padding?)`
+
+Calculate an appropriate MapLibre zoom level to fit bounds.
+
+- `bounds`: `[[minLng, minLat], [maxLng, maxLat]]`
+- `container`: `{ width, height }` in pixels
+- `padding`: extra zoom reduction (default `0.5`)
+- Returns: `number` (clamped 1–20)
+
+### `BoundsHelper.calculatePanCenter(overlay)`
+
+Extract a center point from an overlay's first deck.gl layer data point.
+
+- Returns `[lng, lat]` or `null`
+
+---
+
+## Overlay Configuration Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | Unique identifier |
+| `label` | string | yes | Display name in UI |
+| `deckLayers` | Array | no* | Static deck.gl layer definitions |
+| `onChecked` | async function | no* | Dynamic overlay callback (see [ONECHECKED.md](./ONECHECKED.md)) |
+| `group` | string | no | Group ID for grouping in UI |
+| `defaultVisible` | boolean | no | Initial visibility (default `false`) |
+| `defaultOpacity` | number | no | Initial opacity 0–1 (default `1.0`) |
+| `opacityControls` | boolean | no | Show opacity slider in UI |
+| `viewport` | object | no | Viewport to apply on activation — `{ fitBounds, center, zoom, bearing, pitch }` |
+| `forcedBaseLayerId` | string | no | Switch to this base style before activating |
+| `forcedBearing` | number | no | Apply this bearing after activation |
+| `forcedPitch` | number | no | Apply this pitch after activation |
+| `minZoomLevel` | number | no | Hide overlay below this zoom |
+| `maxZoomLevel` | number | no | Hide overlay above this zoom |
+| `tooltip` | string \| object | no | Tooltip field name or field map |
+| `getTooltip` | function | no | Custom tooltip renderer `(object) => string` |
+
+*One of `deckLayers` or `onChecked` is required for the overlay to render anything.
+
+### `viewport` object fields
+
+| Field | Description |
+|-------|-------------|
+| `fitBounds` | `[[minLng, minLat], [maxLng, maxLat]]` — fit map to these bounds (takes priority over center/zoom) |
+| `center` | `[lng, lat]` — pan to this center |
+| `zoom` | zoom level to apply (used with `center`; ignored when `fitBounds` is set) |
+| `bearing` | map bearing in degrees |
+| `pitch` | map pitch in degrees |
+
+---
+
+## State Schema
+
+State persisted to localStorage:
+
+```json
+{
+  "base": "osm",
+  "overlays": {
+    "overlay-id": { "visible": true, "opacity": 0.8 }
+  },
+  "groups": {
+    "group-id": { "visible": true, "opacity": 1.0 }
+  },
+  "viewport": {
+    "center": { "lng": -95, "lat": 40 },
+    "zoom": 5,
+    "bearing": 0,
+    "pitch": 0
+  }
+}
+```
+
+---
+
+## See Also
+
+- [QUICKSTART.md](./QUICKSTART.md) — Getting started
+- [CONFIGURATION.md](./CONFIGURATION.md) — Full options reference
+- [EVENTS.md](./EVENTS.md) — Event payloads
+- [ONECHECKED.md](./ONECHECKED.md) — Dynamic overlay callbacks
+- [CSS.md](./CSS.md) — UI customization
