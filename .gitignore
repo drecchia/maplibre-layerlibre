@@ -1,2 +1,9 @@
 /node_modules
 /dist/
+
+# Dead TypeScript stubs from abandoned migration — never compiled, not part of build
+src/js/di/
+src/js/events/
+src/js/interfaces/
+src/js/services/
+src/js/utils/
