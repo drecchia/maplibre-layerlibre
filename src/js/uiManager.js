@@ -51,6 +51,11 @@ class UIManager {
         // Per-overlay cache (survives show/hide cycles)
         this.overlayCache = new Map(); // overlayId → any
 
+        // Concurrency guards
+        this._activationTokens = new Map(); // overlayId → int, bumped on every activate/deactivate
+        this._styleLoadHandler = null;      // pending 'style.load' handler from _applyBaseToMap
+        this._appliedBaseId    = null;      // base whose style is applied (or being applied)
+
         // Bound handlers
         this._handleToggleClick   = this._handleToggleClick.bind(this);
         this._handleDocumentClick = this._handleDocumentClick.bind(this);
@@ -68,12 +73,30 @@ class UIManager {
     }
 
     setMap(map) {
+        // Detach from the previous map first — otherwise the deck.gl overlay and the
+        // zoomend listener stay attached to it forever and keep rendering.
+        if (this.map && this.map !== map) this._detachFromMap();
         this.map = map;
         if (this.mapService) this.mapService.setMap(map);
         if (map) {
             this._initializeDeckOverlay();
             map.on('zoomend', this._onZoomEnd);
         }
+    }
+
+    // Remove everything this UIManager attached to the current map.
+    _detachFromMap() {
+        if (!this.map) return;
+        this.map.off('zoomend', this._onZoomEnd);
+        if (this._styleLoadHandler) {
+            this.map.off('style.load', this._styleLoadHandler);
+            this._styleLoadHandler = null;
+        }
+        if (this.deckOverlay) {
+            try { this.map.removeControl(this.deckOverlay); } catch (e) { /* ignore */ }
+            this.deckOverlay = null;
+        }
+        this._appliedBaseId = null;
     }
 
     setContainer(container) {
@@ -106,15 +129,11 @@ class UIManager {
     }
 
     destroy() {
-        if (this.map) {
-            this.map.off('zoomend', this._onZoomEnd);
-        }
+        this._detachFromMap();
         if (this.options && this.options.autoClose) {
             document.removeEventListener('click', this._handleDocumentClick);
         }
-        if (this.deckOverlay && this.map) {
-            try { this.map.removeControl(this.deckOverlay); } catch (e) { /* ignore */ }
-        }
+        this._activationTokens.clear();
         this.deckLayers.clear();
         this.overlayToLayerIds.clear();
         this.loadingStates.clear();
@@ -585,6 +604,18 @@ class UIManager {
         const baseStyle = (this.options.baseStyles || []).find(b => b.id === baseId);
         if (!baseStyle || !baseStyle.style) return;
 
+        // Already applied (or mid-flight) — a redundant setStyle() throws away every
+        // deck.gl layer and re-runs every onChecked for nothing.
+        if (this._appliedBaseId === baseId) return;
+        this._appliedBaseId = baseId;
+
+        // Cancel a handler still pending from an earlier base change. Without this,
+        // rapid base switching stacks handlers that each re-activate every overlay.
+        if (this._styleLoadHandler) {
+            this.map.off('style.load', this._styleLoadHandler);
+            this._styleLoadHandler = null;
+        }
+
         // Remove existing deck overlay so it can be re-added after style load
         if (this.deckOverlay) {
             try { this.map.removeControl(this.deckOverlay); } catch (e) { /* ignore */ }
@@ -595,21 +626,23 @@ class UIManager {
 
         this.map.setStyle(baseStyle.style);
 
-        this.map.once('styledata', () => {
-            setTimeout(() => {
-                this._initializeDeckOverlay();
-                // Restore visible overlays
-                const overlayStates = this.stateService.getOverlayStates();
-                Object.keys(overlayStates).forEach(overlayId => {
-                    const state = overlayStates[overlayId];
-                    if (state && state.visible) {
-                        this._activateOverlay(overlayId, false);
-                    }
-                });
-                this.eventEmitter.emit('styleload', { baseId });
-                this.eventEmitter.emit('change', { type: 'styleload', baseId });
-            }, 50);
-        });
+        // 'style.load' fires exactly once per style change, after the style is ready.
+        // ('styledata' fires repeatedly during a load, so the first one is too early.)
+        this._styleLoadHandler = () => {
+            this._styleLoadHandler = null;
+            this._initializeDeckOverlay();
+            // Restore visible overlays
+            const overlayStates = this.stateService.getOverlayStates();
+            Object.keys(overlayStates).forEach(overlayId => {
+                const state = overlayStates[overlayId];
+                if (state && state.visible) {
+                    this._activateOverlay(overlayId, false);
+                }
+            });
+            this.eventEmitter.emit('styleload', { baseId });
+            this.eventEmitter.emit('change', { type: 'styleload', baseId });
+        };
+        this.map.once('style.load', this._styleLoadHandler);
     }
 
     // ── deck.gl initialization ─────────────────────────────────────────────
@@ -640,6 +673,11 @@ class UIManager {
 
         let overlay = (this.options.overlays || []).find(o => o.id === overlayId);
         if (!overlay) return;
+
+        // Claim this overlay. Any later activate/deactivate bumps the token, which
+        // tells a run resuming from `await onChecked` that it has been superseded.
+        const token = (this._activationTokens.get(overlayId) || 0) + 1;
+        this._activationTokens.set(overlayId, token);
 
         this._setLoadingState(overlayId, true);
 
@@ -681,6 +719,9 @@ class UIManager {
             // onChecked callback (dynamic overlay)
             if (overlay.onChecked) {
                 await this._executeOnChecked(overlayId, overlay, isUserInteraction);
+                // Superseded while awaiting — bail before re-adding layers a
+                // deactivate has already removed (they would render forever).
+                if (this._activationTokens.get(overlayId) !== token) return;
                 // Re-fetch overlay after callback (setOverlayConfig may have mutated it)
                 overlay = (this.options.overlays || []).find(o => o.id === overlayId);
             }
@@ -766,6 +807,8 @@ class UIManager {
     }
 
     _deactivateOverlay(overlayId) {
+        // Supersede any in-flight activation so it can't re-add layers after us.
+        this._activationTokens.set(overlayId, (this._activationTokens.get(overlayId) || 0) + 1);
         const layerIds = this.overlayToLayerIds.get(overlayId);
         if (layerIds) {
             layerIds.forEach(layerId => this.deckLayers.delete(layerId));
