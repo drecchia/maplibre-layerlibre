@@ -20,7 +20,8 @@
         "vanillajs"
     ],
     "scripts": {
-        "build": "gulp default"
+        "build": "gulp default",
+        "test": "node test/stability.test.js"
     },
     "devDependencies": {
         "gulp": "^4.0.2",
