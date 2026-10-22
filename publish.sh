@@ -1,1 +1,1 @@
-npm install && npm run build && npm publish --access public
+pnpm install && pnpm run build && pnpm publish --access public

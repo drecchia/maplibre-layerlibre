@@ -27,7 +27,7 @@ License: CC-BY-NC-4.0
 ## Build
 
 ```bash
-npm run build          # runs `gulp default` → writes dist/js/all.min.js + dist/css/all.css
+pnpm run build          # runs `gulp default` → writes dist/js/all.min.js + dist/css/all.css
 ```
 
 The build is Gulp-only; there is no webpack/vite/rollup.  All source files are
@@ -183,7 +183,7 @@ bundle.
 `examples/new-architecture-usage.html` is an additional demo of the full
 five-service instantiation pattern.
 
-To test locally: run `npm run build`, then open any example HTML directly in
+To test locally: run `pnpm run build`, then open any example HTML directly in
 a browser (or via a simple local HTTP server).
 
 ---

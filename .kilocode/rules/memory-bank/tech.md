@@ -18,18 +18,18 @@
 ### Development Tools
 - **ESLint**: JavaScript linting
 - **Git**: Version control
-- **npm**: Package management
+- **pnpm**: Package management
 
 ## Development Setup
 
 ### Installation
 ```bash
-npm install
+pnpm install
 ```
 
 ### Build
 ```bash
-npm run build
+pnpm run build
 ```
 
 This runs the Gulp default task which:
@@ -68,7 +68,7 @@ This runs the Gulp default task which:
 
 ## Dependencies
 
-### npm Dependencies (Dev)
+### pnpm Dependencies (Dev)
 - gulp: ^4.0.2
 - gulp-autoprefixer: ^8.0.0
 - gulp-clean-css: ^4.3.0
