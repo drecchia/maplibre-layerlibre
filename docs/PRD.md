@@ -621,8 +621,8 @@ All styles are in `dist/css/all.css`. Override in your application CSS.
 ## 14. Build
 
 ```bash
-npm install        # install dev dependencies (gulp, etc.)
-npm run build      # → dist/js/all.min.js + dist/css/all.css
+pnpm install        # install dev dependencies (gulp, etc.)
+pnpm run build      # → dist/js/all.min.js + dist/css/all.css
 ```
 
 Source entry point for JS: `src/js/helper.js`, `src/js/uiManager.js`, `src/js/layersControl.js` (concatenated via `gulp/js.js`).

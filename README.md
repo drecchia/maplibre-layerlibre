@@ -24,7 +24,7 @@ A compact layer-switcher control for [MapLibre GL JS](https://maplibre.org/) wit
 
 ## Installation
 
-Load MapLibre GL JS, deck.gl, and the LayersControl bundle from CDN, then build with `npm run build` to produce `dist/js/all.min.js` and `dist/css/all.css`.
+Load MapLibre GL JS, deck.gl, and the LayersControl bundle from CDN, then build with `pnpm run build` to produce `dist/js/all.min.js` and `dist/css/all.css`.
 
 ```html
 <link href="https://unpkg.com/maplibre-gl@4.1.1/dist/maplibre-gl.css" rel="stylesheet">
@@ -38,8 +38,8 @@ Load MapLibre GL JS, deck.gl, and the LayersControl bundle from CDN, then build 
 Build the bundle:
 
 ```bash
-npm install
-npm run build   # → dist/js/all.min.js + dist/css/all.css
+pnpm install
+pnpm run build   # → dist/js/all.min.js + dist/css/all.css
 ```
 
 ---
